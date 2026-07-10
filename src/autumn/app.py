@@ -8,7 +8,17 @@ from typing import Callable
 from textual.app import App
 from textual.theme import Theme
 
-from autumn import chat_store, local_llm, local_models, model_router, palette, paths, queue_store, runner
+from autumn import (
+    chat_store,
+    local_llm,
+    local_models,
+    model_downloader,
+    model_router,
+    palette,
+    paths,
+    queue_store,
+    runner,
+)
 from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
@@ -26,6 +36,7 @@ from autumn.screens.confirm_screen import ConfirmScreen
 from autumn.screens.dashboard_screen import DashboardScreen
 from autumn.screens.help_screen import HelpScreen
 from autumn.screens.input_screen import InputScreen
+from autumn.screens.model_picker_screen import ModelPickerScreen
 
 # Retints Textual's own built-in widget chrome (Input focus border, Button,
 # scrollbars, DataTable cursor, etc.) to match styles/autumn.tcss's fall
@@ -127,6 +138,7 @@ class AutumnApp(App):
         local_model_runner: LocalModelRunner | None = None,
         is_model_runtime_available: model_router.RuntimeAvailability | None = None,
         prompt_routing_policy: PromptRoutingPolicy | None = None,
+        model_download_fn: model_downloader.DownloadFile | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(_AUTUMN_THEME)
@@ -156,6 +168,10 @@ class AutumnApp(App):
         self._local_model_runner = local_model_runner or LocalModelRunner()
         self._is_model_runtime_available = is_model_runtime_available
         self._prompt_routing_policy = prompt_routing_policy
+        # None means "use model_downloader's real Hugging Face download";
+        # tests inject a fake here to avoid real network calls from
+        # ModelDownloadScreen.
+        self._model_download_fn = model_download_fn
 
         # Launch mode iff both run_name and run_dir are given (cli.py's `run`
         # subcommand always supplies both together); otherwise this is
@@ -219,7 +235,10 @@ class AutumnApp(App):
             self._chat_sessions_root, self._chat_session_path
         )
         if not leftover and not leftover_chats:
-            self.push_screen(InputScreen())
+            if not local_models.list_models(self._model_catalog_root):
+                self.push_screen(ModelPickerScreen())
+            else:
+                self.push_screen(InputScreen())
             return
 
         merged = queue_store.load_and_merge(leftover)
@@ -305,9 +324,24 @@ class AutumnApp(App):
     def _persist_chat(self) -> None:
         chat_store.persist_chat(self._chat_session_path, self.chat_messages, pid=os.getpid())
 
+    @property
+    def model_catalog_root(self) -> Path:
+        return self._model_catalog_root
+
+    @property
+    def model_download_fn(self) -> model_downloader.DownloadFile | None:
+        return self._model_download_fn
+
     def set_default_model(self, name: str) -> None:
         local_models.set_default(self._model_catalog_root, name)
         self.notify(f"Default model set to {name}", severity="information")
+
+    def finish_model_download(self) -> None:
+        """ModelDownloadScreen's success path: the freshly-installed model
+        is already the catalog default (first model installed), so this
+        just continues into the dashboard exactly like InputScreen's
+        empty-Enter path (`enter_browse_mode`)."""
+        self.enter_browse_mode()
 
     def _append_user_prompt(self, text: str) -> ChatMessage:
         message = ChatMessage(role="user", text=text)

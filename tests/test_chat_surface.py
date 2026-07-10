@@ -273,6 +273,10 @@ async def test_prompt_with_provider_policy_falls_back_until_provider_execution_e
     app = AutumnApp(
         runs_root=tmp_path,
         chat_sessions_root=tmp_path / "chats",
+        # Explicit (empty) catalog root, bypassing conftest's seeded local
+        # model -- this test asserts the exact "offline fallback" reason,
+        # which only holds when there's truly nothing local to try first.
+        model_catalog_root=tmp_path / "models",
         prompt_routing_policy=PromptRoutingPolicy(
             provider_accounts=[
                 ProviderAccount(provider="claude", account_id="personal", is_signed_in=True)
@@ -289,6 +293,10 @@ async def test_prompt_with_provider_policy_falls_back_until_provider_execution_e
     )
 
     async with app.run_test() as pilot:
+        await pilot.pause()
+        # Empty catalog -> ModelPickerScreen lands first; skip it to reach
+        # InputScreen's empty-Enter -> browse-mode path this test cares about.
+        await pilot.press("escape")
         await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()

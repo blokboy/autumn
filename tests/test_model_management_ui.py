@@ -47,6 +47,10 @@ async def test_models_tab_shows_empty_state_when_no_models_are_installed(tmp_pat
 
     async with app.run_test() as pilot:
         await pilot.pause()
+        # Empty catalog -> ModelPickerScreen lands first; skip it to reach
+        # InputScreen's empty-Enter -> browse-mode path this test cares about.
+        await pilot.press("escape")
+        await pilot.pause()
         await pilot.press("enter")
         await pilot.pause()
 
