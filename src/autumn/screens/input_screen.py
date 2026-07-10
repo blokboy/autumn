@@ -16,6 +16,7 @@ error notification and leaves the user on this screen rather than crashing or
 navigating away.
 """
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
@@ -23,6 +24,38 @@ from textual.widgets import Input, Label
 
 from autumn.cli import LaunchSpecError, parse_command_line
 from autumn.widgets.deer_sprite import DeerSprite
+
+# Keys that should act as the app-level shortcuts advertised in the landing
+# screen's footer, but only while the field is still empty -- keyed by the
+# character Input._on_key reports, mapped to the AutumnApp action to call.
+_EMPTY_INPUT_SHORTCUTS = {"q": "action_request_quit", "?": "action_toggle_help"}
+
+
+class _CommandInput(Input):
+    """Input variant used only by InputScreen.
+
+    `Input._on_key` unconditionally consumes and stops every printable key
+    before it can reach any binding -- Textual's `check_consume_key`-based
+    filtering strips even `priority=True` Screen/App bindings for a
+    printable key out of the binding chain whenever an Input has focus (see
+    `textual.screen.Screen._binding_chain`), so a plain `BINDINGS` entry for
+    `q`/`question_mark` can never fire here the way it does on DashboardScreen
+    (whose CommandBar Input stays unfocused until `:`). This subclass
+    special-cases those two keys itself, before the base class's insertion
+    logic runs, and only while the field is empty -- so a real `q` or `?`
+    typed as part of a command or chat prompt (e.g. "what's my score?") is
+    unaffected.
+    """
+
+    async def _on_key(self, event: events.Key) -> None:
+        action = _EMPTY_INPUT_SHORTCUTS.get(event.character) if not self.value else None
+        if action is not None:
+            event.stop()
+            event.prevent_default()
+            getattr(self.app, action)()
+            return
+        await super()._on_key(event)
+
 
 # Mirrors torlink's Splash (src/ui/views/Splash.tsx): centered borderless
 # column -- big block-letter logo, dim descriptive line, input, dot-separated
@@ -89,7 +122,7 @@ class InputScreen(Screen):
             yield Label("\n".join(_LOGO_LINES), classes="app-title")
             yield DeerSprite()
             yield Label(_HINT_TEXT, classes="input-hint")
-            yield Input(placeholder="Ask Autumn about your runs...", id="command-input")
+            yield _CommandInput(placeholder="Ask Autumn about your runs...", id="command-input")
             yield Label(_FOOTER_HINT, classes="app-footer-hint")
 
     def on_mount(self) -> None:

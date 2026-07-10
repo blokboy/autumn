@@ -12,6 +12,7 @@ from textual.widgets import Input, Label
 from autumn.app import AutumnApp
 from autumn.models import ChatMessage, RunStatus
 from autumn.screens.dashboard_screen import DashboardScreen
+from autumn.screens.help_screen import HelpScreen
 from autumn.screens.input_screen import InputScreen
 
 
@@ -127,6 +128,50 @@ async def test_gepa_command_bad_flag_shows_error_and_stays(tmp_path):
         notifications = list(app._notifications)
         assert len(notifications) == 1
         assert notifications[0].severity == "error"
+
+
+async def test_q_quits_when_input_is_empty(tmp_path):
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, InputScreen)
+
+        await pilot.press("q")
+        await pilot.pause()
+
+        assert app._exit
+
+
+async def test_question_mark_opens_help_when_input_is_empty(tmp_path):
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, InputScreen)
+
+        await pilot.press("question_mark")
+        await pilot.pause()
+
+        assert isinstance(app.screen, HelpScreen)
+
+
+async def test_typed_q_and_question_mark_are_not_intercepted_once_input_is_non_empty(tmp_path):
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        # Real keystrokes (not insert_text_at_cursor, which bypasses
+        # _CommandInput._on_key entirely) -- the leading "gepa" keystrokes
+        # make the field non-empty before the "q" and "question_mark" presses
+        # that matter for this test.
+        for key in "gepa":
+            await pilot.press(key)
+        await pilot.press("q")
+        await pilot.press("question_mark")
+        await pilot.pause()
+
+        assert isinstance(app.screen, InputScreen)
+        assert app.screen.query_one(Input).value == "gepaq?"
+        assert not app._exit
 
 
 async def test_non_gepa_prompt_opens_dashboard_chat(tmp_path):
