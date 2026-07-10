@@ -84,7 +84,7 @@ async def test_pop_deletes_session_file_when_queue_drains_to_empty(tmp_path):
     )
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.submit_command("a stub prompt")
+        app.submit_command("a queued prompt")
         await pilot.pause()
         assert app._queue_session_path.exists()
 
@@ -124,7 +124,7 @@ async def test_resume_merges_leftover_sessions_and_auto_launches_first_item(tmp_
         assert app.state is not None
         assert app.state.run_name == "resumed"
         assert app.state.status is RunStatus.RUNNING
-        # The gepa item launched immediately; the stub prompt stays queued behind it.
+        # The gepa item launched immediately; the chat prompt stays queued behind it.
         assert app.pending_queue == ["a queued prompt"]
         assert app._queue_session_path.exists()
         assert json.loads(app._queue_session_path.read_text())["items"] == [
@@ -179,6 +179,105 @@ async def test_resume_restores_leftover_chat_session(tmp_path):
         chat_text = app.screen.query_one("#chat-transcript", Static).content
         assert "You: what happened?" in str(chat_text)
         assert not leftover.exists()
+
+
+async def test_resume_merges_leftover_queue_and_chat_into_current_sessions(tmp_path):
+    queue_sessions_root = tmp_path / "queue-sessions"
+    chat_sessions_root = tmp_path / "chat-sessions"
+    queue_leftover = queue_store.session_path(queue_sessions_root, "queue-leftover")
+    chat_leftover = chat_store.session_path(chat_sessions_root, "chat-leftover")
+    queue_store.persist_queue(queue_leftover, ["queued prompt"], pid=_dead_pid())
+    chat_store.persist_chat(
+        chat_leftover,
+        [
+            ChatMessage(role="user", text="old question"),
+            ChatMessage(role="assistant", text="old answer", model="autumn/offline-tiny"),
+            ChatMessage(role="user", text="queued prompt"),
+        ],
+        pid=_dead_pid(),
+    )
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        queue_sessions_root=queue_sessions_root,
+        chat_sessions_root=chat_sessions_root,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        assert "1 pending item" in app.screen.message
+        assert "3 pending chat messages" in app.screen.message
+
+        await pilot.press("y")
+        await pilot.pause()
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, DashboardScreen)
+        assert app.pending_queue == []
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="old question"),
+            ChatMessage(role="assistant", text="old answer", model="autumn/offline-tiny"),
+            ChatMessage(role="user", text="queued prompt"),
+            ChatMessage(
+                role="assistant",
+                text="Offline local response: queued prompt",
+                model="autumn/offline-tiny",
+            ),
+        ]
+        assert chat_store.load_chat(app._chat_session_path) == app.chat_messages
+        assert not queue_leftover.exists()
+        assert not chat_leftover.exists()
+
+
+async def test_start_fresh_deletes_leftover_chat_and_does_not_seed_current_session(tmp_path):
+    chat_sessions_root = tmp_path / "chat-sessions"
+    leftover = chat_store.session_path(chat_sessions_root, "leftover")
+    chat_store.persist_chat(leftover, [ChatMessage(role="user", text="old question")], pid=_dead_pid())
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        queue_sessions_root=tmp_path / "queue-sessions",
+        chat_sessions_root=chat_sessions_root,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+
+        await pilot.press("n")
+        await pilot.pause()
+
+        assert isinstance(app.screen, InputScreen)
+        assert app.chat_messages == []
+        assert not leftover.exists()
+        assert not app._chat_session_path.exists()
+
+
+async def test_invalid_leftover_chat_session_does_not_trigger_resume_prompt(tmp_path):
+    chat_sessions_root = tmp_path / "chat-sessions"
+    malformed = chat_store.session_path(chat_sessions_root, "malformed")
+    malformed.parent.mkdir(parents=True)
+    malformed.write_text(
+        json.dumps(
+            {
+                "pid": _dead_pid(),
+                "messages": [
+                    {"role": "system", "text": "drop me"},
+                    {"role": "assistant"},
+                ],
+            }
+        )
+    )
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        queue_sessions_root=tmp_path / "queue-sessions",
+        chat_sessions_root=chat_sessions_root,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        assert isinstance(app.screen, InputScreen)
+        assert malformed.exists()
 
 
 async def test_start_fresh_deletes_leftover_files_and_shows_input_screen(tmp_path):

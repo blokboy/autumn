@@ -32,7 +32,7 @@ def _spec(name: str, tmp_path: Path) -> LaunchSpec:
 def test_persist_queue_writes_items_and_pid(tmp_path):
     path = tmp_path / "session.json"
     spec = _spec("alpha", tmp_path)
-    queue_store.persist_queue(path, [spec, "a stub prompt"], pid=4242)
+    queue_store.persist_queue(path, [spec, "a queued prompt"], pid=4242)
 
     payload = json.loads(path.read_text())
     assert payload["pid"] == 4242
@@ -44,7 +44,7 @@ def test_persist_queue_writes_items_and_pid(tmp_path):
             "script_path": str(tmp_path / "alpha.py"),
             "dry_run": True,
         },
-        {"kind": "prompt", "text": "a stub prompt"},
+        {"kind": "prompt", "text": "a queued prompt"},
     ]
 
 

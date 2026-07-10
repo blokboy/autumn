@@ -7,12 +7,12 @@ from autumn.models import ChatMessage
 
 
 def _render_model_status(model_status: str | None) -> str:
-    return model_status or "Model: not selected yet"
+    return model_status or "Model: ready to choose a local model or offline fallback"
 
 
 def _render_messages(messages: list[ChatMessage]) -> str:
     if not messages:
-        return "No chat messages yet."
+        return "Ask Autumn about your runs from the landing input or command bar."
     lines = []
     for message in messages:
         speaker = "You" if message.role == "user" else "Autumn"
@@ -22,7 +22,7 @@ def _render_messages(messages: list[ChatMessage]) -> str:
 
 
 class ChatView(Static):
-    """Renders the dashboard-scoped LLM conversation."""
+    """Renders the shared dashboard chat conversation."""
 
     DEFAULT_CSS = """
     ChatView {

@@ -1,12 +1,21 @@
 """Behavioral tests for dashboard-scoped chat prompts."""
 
+import json
+
 from textual.widgets import Static
 from textual.widgets import Input
 
 from autumn import local_models
 from autumn.app import AutumnApp
 from autumn.local_model_runner import LocalModelRuntimeError
-from autumn.models import ChatMessage, LocalModel, PromptRoutingPolicy, ProviderAccount, ProviderModel
+from autumn.models import (
+    ChatMessage,
+    LocalModel,
+    PromptRoutingPolicy,
+    ProviderAccount,
+    ProviderModel,
+    RunStatus,
+)
 from autumn.screens.dashboard_screen import DashboardScreen
 from autumn.widgets.command_bar import CommandBar
 
@@ -25,6 +34,22 @@ async def test_non_gepa_landing_prompt_opens_dashboard_chat(tmp_path):
         assert app.chat_messages[0] == ChatMessage(role="user", text="summarize my last run")
         chat_text = app.screen.query_one("#chat-transcript", Static).content
         assert "You: summarize my last run" in str(chat_text)
+
+
+async def test_empty_chat_explains_shared_prompt_surface(tmp_path):
+    app = AutumnApp(runs_root=tmp_path, chat_sessions_root=tmp_path / "chats")
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        status_text = app.screen.query_one("#chat-model-status", Static).content
+        chat_text = app.screen.query_one("#chat-transcript", Static).content
+
+        assert "Model: ready to choose a local model or offline fallback" in str(status_text)
+        assert "Ask Autumn about your runs from the landing input or command bar." in str(chat_text)
+        assert "stub" not in str(chat_text).lower()
 
 
 async def test_non_gepa_command_bar_prompt_updates_same_dashboard_chat(tmp_path):
@@ -155,7 +180,57 @@ async def test_prompt_falls_back_when_installed_model_runtime_fails(tmp_path):
             ),
         ]
         status_text = app.screen.query_one("#chat-model-status", Static).content
-        assert "Fallback: tiny failed: bad model file" in str(status_text)
+        assert "Fallback: autumn/offline-tiny (tiny failed: bad model file)" in str(status_text)
+
+
+async def test_prompt_preserves_selected_model_error_response_without_fallback(tmp_path):
+    source_model = tmp_path / "source.gguf"
+    source_model.write_bytes(b"fake gguf")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=source_model)
+
+    class ErrorResponseLocalModelRunner:
+        def generate(self, messages: list[ChatMessage], model: LocalModel) -> ChatMessage:
+            return ChatMessage(
+                role="assistant",
+                text="Error: context window exceeded",
+                model=model.name,
+            )
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=catalog_root,
+        local_model_runner=ErrorResponseLocalModelRunner(),
+        is_model_runtime_available=lambda model: True,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await pilot.press(":")
+        await pilot.pause()
+        app.screen.query_one(CommandBar).query_one(Input).insert_text_at_cursor("hello")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="hello"),
+            ChatMessage(
+                role="assistant",
+                text="Error: context window exceeded",
+                model="tiny",
+            ),
+        ]
+        status_text = app.screen.query_one("#chat-model-status", Static).content
+        assert "Model error: tiny (installed default): Error: context window exceeded" in str(
+            status_text
+        )
+        chat_text = app.screen.query_one("#chat-transcript", Static).content
+        assert "Autumn [tiny]: Error: context window exceeded" in str(chat_text)
 
 
 async def test_prompt_shows_fallback_reason_when_installed_model_runtime_is_missing(tmp_path):
@@ -191,7 +266,7 @@ async def test_prompt_shows_fallback_reason_when_installed_model_runtime_is_miss
             ),
         ]
         status_text = app.screen.query_one("#chat-model-status", Static).content
-        assert "Fallback: runtime missing for tiny" in str(status_text)
+        assert "Fallback: autumn/offline-tiny (runtime missing for tiny)" in str(status_text)
 
 
 async def test_prompt_with_provider_policy_falls_back_until_provider_execution_exists(tmp_path):
@@ -234,4 +309,57 @@ async def test_prompt_with_provider_policy_falls_back_until_provider_execution_e
             ),
         ]
         status_text = app.screen.query_one("#chat-model-status", Static).content
-        assert "Fallback: provider claude/sonnet not executable yet" in str(status_text)
+        assert "Fallback: autumn/offline-tiny (offline fallback)" in str(status_text)
+
+
+async def test_live_run_queues_prompt_replies_in_order_without_duplicate_users(tmp_path):
+    script = tmp_path / "slow.py"
+    script.write_text("import time\ntime.sleep(0.3)\n")
+    app = AutumnApp(
+        runs_root=tmp_path,
+        run_name="live",
+        run_dir=tmp_path / "live",
+        script_path=script,
+        dry_run=False,
+        queue_sessions_root=tmp_path / "queues",
+        chat_sessions_root=tmp_path / "chats",
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.state.status is RunStatus.RUNNING
+
+        app.submit_command("first queued prompt")
+        app.submit_command("second queued prompt")
+        await pilot.pause(0.1)
+
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="first queued prompt"),
+            ChatMessage(role="user", text="second queued prompt"),
+        ]
+        assert json.loads(app._queue_session_path.read_text())["items"] == [
+            {"kind": "prompt", "text": "first queued prompt"},
+            {"kind": "prompt", "text": "second queued prompt"},
+        ]
+        assert json.loads(app._chat_session_path.read_text())["messages"] == [
+            {"role": "user", "text": "first queued prompt"},
+            {"role": "user", "text": "second queued prompt"},
+        ]
+
+        await pilot.pause(0.7)
+
+        assert app.pending_queue == []
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="first queued prompt"),
+            ChatMessage(
+                role="assistant",
+                text="Offline local response: first queued prompt",
+                model="autumn/offline-tiny",
+            ),
+            ChatMessage(role="user", text="second queued prompt"),
+            ChatMessage(
+                role="assistant",
+                text="Offline local response: second queued prompt",
+                model="autumn/offline-tiny",
+            ),
+        ]

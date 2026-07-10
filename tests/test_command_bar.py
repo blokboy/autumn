@@ -1,6 +1,6 @@
 """Behavioral tests for DashboardScreen's CommandBar and AutumnApp's
 in-memory run queue (`:` to focus, `gepa ...` launch-vs-queue branching,
-auto-advance on completion, stub-prompt auto-advance), via Textual's Pilot
+auto-advance on completion, queued prompt auto-advance), via Textual's Pilot
 harness against a real AutumnApp.
 
 Live runs here use trivial real scripts (`runpy`-executed, no GEPA
@@ -50,6 +50,19 @@ async def test_colon_focuses_command_bar(tmp_path):
         await pilot.press(":")
         await pilot.pause()
         assert bar_input.has_focus
+
+
+async def test_command_bar_copy_invites_chat_or_gepa(tmp_path):
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")  # empty Enter on InputScreen -> browse DashboardScreen
+        await pilot.pause()
+
+        bar_input = app.screen.query_one(CommandBar).query_one(Input)
+
+        assert bar_input.placeholder == ": ask Autumn a question or gepa my_script.py --dry-run"
+        assert "stub" not in bar_input.placeholder.lower()
 
 
 async def test_question_mark_still_opens_help_when_bar_unfocused(tmp_path):
@@ -187,7 +200,7 @@ async def test_prompt_queued_while_live_auto_advances_to_chat_reply(tmp_path):
                 model="autumn/offline-tiny",
             ),
         ]
-        # No new run was launched by the stub entry -- the queue just emptied.
+        # No new run was launched by the prompt entry -- the queue just emptied.
         assert app.state.run_name == "first"
 
 

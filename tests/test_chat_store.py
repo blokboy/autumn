@@ -82,6 +82,35 @@ def test_discover_resumable_includes_dead_pid_with_messages(tmp_path):
     assert chat_store.discover_resumable(sessions_root, own) == [other]
 
 
+def test_discover_resumable_excludes_dead_pid_without_valid_messages(tmp_path):
+    sessions_root = tmp_path / "sessions"
+    own = chat_store.session_path(sessions_root, "own")
+    malformed = chat_store.session_path(sessions_root, "malformed")
+    malformed.parent.mkdir(parents=True)
+    malformed.write_text(
+        json.dumps(
+            {
+                "pid": _dead_pid(),
+                "messages": [
+                    {"role": "system", "text": "drop me"},
+                    {"role": "assistant"},
+                    "not even a dict",
+                ],
+            }
+        )
+    )
+
+    assert chat_store.discover_resumable(sessions_root, own) == []
+
+
+def test_discover_resumable_excludes_own_path(tmp_path):
+    sessions_root = tmp_path / "sessions"
+    own = chat_store.session_path(sessions_root, "own")
+    chat_store.persist_chat(own, [ChatMessage(role="user", text="mine")], pid=_dead_pid())
+
+    assert chat_store.discover_resumable(sessions_root, own) == []
+
+
 def test_discover_resumable_excludes_live_pid(tmp_path):
     sessions_root = tmp_path / "sessions"
     own = chat_store.session_path(sessions_root, "own")

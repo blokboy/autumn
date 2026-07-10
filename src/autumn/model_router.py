@@ -20,33 +20,35 @@ def choose_model(
 ) -> ModelChoice:
     models = available_models if available_models is not None else local_models.list_models(catalog_root)
     runtime_available = is_runtime_available or _is_runtime_available
-    installed_default = next((model for model in models if model.is_default), None)
-    if installed_default is not None:
-        if not runtime_available(installed_default):
-            provider_model = _choose_provider_model(policy)
-            if provider_model is not None:
-                return _provider_choice(provider_model)
-            return ModelChoice(
-                name=local_llm.OFFLINE_TINY_MODEL,
-                backend="builtin",
-                path=None,
-                reason=f"runtime missing for {installed_default.name}",
-            )
-        return ModelChoice(
-            name=installed_default.name,
-            backend=installed_default.backend,
-            path=installed_default.path,
-            reason="installed default",
-            context_window=installed_default.context_window,
-        )
-    provider_model = _choose_provider_model(policy)
-    if provider_model is not None:
-        return _provider_choice(provider_model)
+    unavailable_reasons: list[str] = []
+
+    for model in _local_candidates(models):
+        if runtime_available(model):
+            return _local_choice(model, "installed default" if model.is_default else "installed local")
+        unavailable_reasons.append(f"runtime missing for {model.name}")
+
     return ModelChoice(
         name=local_llm.OFFLINE_TINY_MODEL,
         backend="builtin",
         path=None,
-        reason="offline fallback",
+        reason=unavailable_reasons[0] if unavailable_reasons else "offline fallback",
+    )
+
+
+def _local_candidates(models: list[LocalModel]) -> list[LocalModel]:
+    installed_default = next((model for model in models if model.is_default), None)
+    if installed_default is None:
+        return models
+    return [installed_default, *[model for model in models if model is not installed_default]]
+
+
+def _local_choice(model: LocalModel, reason: str) -> ModelChoice:
+    return ModelChoice(
+        name=model.name,
+        backend=model.backend,
+        path=model.path,
+        reason=reason,
+        context_window=model.context_window,
     )
 
 

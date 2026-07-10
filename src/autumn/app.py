@@ -3,6 +3,7 @@
 import os
 import threading
 from pathlib import Path
+from typing import Callable
 
 from textual.app import App
 from textual.theme import Theme
@@ -73,8 +74,20 @@ def _resume_prompt_message(
 
 def _model_status_from_choice(choice: ModelChoice) -> str:
     if choice.backend == "builtin":
-        return f"Fallback: {choice.reason}"
+        return f"Fallback: {choice.name} ({choice.reason})"
     return f"Model: {choice.name} ({choice.reason})"
+
+
+def _message_looks_like_error_response(message: ChatMessage) -> bool:
+    text = message.text.strip().lower()
+    return text.startswith(("error:", "error ", "failed:", "failure:", "runtime error:"))
+
+
+def _model_status_for_reply(message: ChatMessage, choice: ModelChoice) -> str:
+    if choice.backend != "builtin" and _message_looks_like_error_response(message):
+        model = message.model or choice.name
+        return f"Model error: {model} ({choice.reason}): {message.text}"
+    return _model_status_from_choice(choice)
 
 
 # How often to check whether this process's own live run has left RUNNING, so
@@ -156,13 +169,14 @@ class AutumnApp(App):
 
         # In-memory-only queue of commands submitted via CommandBar while a
         # run was already live (see submit_command below); each entry is
-        # either a LaunchSpec (a `gepa ...` command) or a plain str (a stub
-        # prompt, queued only so it auto-advances in the same order it was
-        # submitted). `_queue_watch_state` is whichever DashboardState
+        # either a LaunchSpec (a `gepa ...` command) or a plain str (a chat
+        # prompt, queued so it is answered in the same order it was submitted).
+        # `_queue_watch_state` is whichever DashboardState
         # `_poll_queue_advance` is currently watching for a RUNNING -> terminal
         # transition -- always `self.state` as of the last time a live run was
         # (re)started, so the poll never fires twice for the same run.
         self.pending_queue: list[LaunchSpec | str] = []
+        self._queued_prompt_refs: list[ChatMessage | None] = []
         self._queue_watch_state: DashboardState | None = self.state
 
     def on_mount(self) -> None:
@@ -223,6 +237,7 @@ class AutumnApp(App):
             if confirmed:
                 self.pending_queue = merged
                 self.chat_messages = merged_chat
+                self._rebuild_queued_prompt_refs()
                 self._persist_queue()
                 self._persist_chat()
                 # Not enter_browse_mode()'s switch_screen: by the time this
@@ -294,25 +309,52 @@ class AutumnApp(App):
         local_models.set_default(self._model_catalog_root, name)
         self.notify(f"Default model set to {name}", severity="information")
 
-    def _append_user_prompt(self, text: str) -> None:
-        self.chat_messages.append(ChatMessage(role="user", text=text))
-        self._persist_chat()
-        if hasattr(self, "_dashboard_screen"):
-            self._dashboard_screen.refresh_chat(self.chat_messages, self._chat_model_status)
-
-    def _append_assistant_reply(self, message: ChatMessage, choice: ModelChoice) -> None:
+    def _append_user_prompt(self, text: str) -> ChatMessage:
+        message = ChatMessage(role="user", text=text)
         self.chat_messages.append(message)
-        self._chat_model_status = _model_status_from_choice(choice)
         self._persist_chat()
         if hasattr(self, "_dashboard_screen"):
             self._dashboard_screen.refresh_chat(self.chat_messages, self._chat_model_status)
+        return message
 
-    def _answer_prompt_async(self) -> None:
-        snapshot = list(self.chat_messages)
+    def _append_assistant_reply(
+        self,
+        message: ChatMessage,
+        choice: ModelChoice,
+        *,
+        insert_after: ChatMessage | None = None,
+        on_complete: Callable[[], None] | None = None,
+    ) -> None:
+        if insert_after is None:
+            self.chat_messages.append(message)
+        else:
+            insert_at = next(
+                (
+                    index + 1
+                    for index, existing in enumerate(self.chat_messages)
+                    if existing is insert_after
+                ),
+                len(self.chat_messages),
+            )
+            self.chat_messages.insert(insert_at, message)
+        self._chat_model_status = _model_status_for_reply(message, choice)
+        self._persist_chat()
+        if hasattr(self, "_dashboard_screen"):
+            self._dashboard_screen.refresh_chat(self.chat_messages, self._chat_model_status)
+        if on_complete is not None:
+            on_complete()
 
+    def _answer_prompt_async(
+        self,
+        *,
+        prompt: str,
+        snapshot: list[ChatMessage],
+        insert_after: ChatMessage | None = None,
+        on_complete: Callable[[], None] | None = None,
+    ) -> None:
         def run() -> None:
             choice = model_router.choose_model(
-                prompt=snapshot[-1].text if snapshot else "",
+                prompt=prompt,
                 catalog_root=self._model_catalog_root,
                 is_runtime_available=self._is_model_runtime_available,
                 policy=self._prompt_routing_policy,
@@ -347,12 +389,18 @@ class AutumnApp(App):
                 message = local_llm.generate_response(snapshot, choice)
             else:
                 message = local_llm.generate_response(snapshot, choice)
-            self.call_from_thread(self._append_assistant_reply, message, choice)
+            self.call_from_thread(
+                self._append_assistant_reply,
+                message,
+                choice,
+                insert_after=insert_after,
+                on_complete=on_complete,
+            )
 
         threading.Thread(target=run, daemon=True).start()
 
     def open_chat_prompt(self, text: str) -> None:
-        self._append_user_prompt(text)
+        user_message = self._append_user_prompt(text)
         self._dashboard_screen = DashboardScreen(
             self.runs_root,
             chat_messages=self.chat_messages,
@@ -360,7 +408,11 @@ class AutumnApp(App):
             model_catalog_root=self._model_catalog_root,
         )
         self.switch_screen(self._dashboard_screen)
-        self.call_after_refresh(self._answer_prompt_async)
+        self.call_after_refresh(
+            self._answer_prompt_async,
+            prompt=text,
+            snapshot=[user_message],
+        )
 
     def _adopt_live_spec(self, spec: LaunchSpec) -> DashboardState:
         """Updates run_name/run_dir/script_path/dry_run and constructs a fresh
@@ -419,17 +471,45 @@ class AutumnApp(App):
         current, not just at quit (see queue_store.py)."""
         queue_store.persist_queue(self._queue_session_path, self.pending_queue, pid=os.getpid())
 
+    def _rebuild_queued_prompt_refs(self) -> None:
+        """Best-effort link from restored prompt queue entries to persisted
+        user messages, favoring the newest matching chat messages for duplicate
+        prompt text.
+        """
+        prompts = [item for item in self.pending_queue if isinstance(item, str)]
+        refs: list[ChatMessage | None] = []
+        cursor = len(self.chat_messages) - 1
+        for prompt in reversed(prompts):
+            found: ChatMessage | None = None
+            for index in range(cursor, -1, -1):
+                message = self.chat_messages[index]
+                if message.role == "user" and message.text == prompt:
+                    found = message
+                    cursor = index - 1
+                    break
+            refs.append(found)
+        self._queued_prompt_refs = list(reversed(refs))
+
+    def _queued_prompt_context(self, prompt: str) -> tuple[list[ChatMessage], ChatMessage]:
+        ref = self._queued_prompt_refs.pop(0) if self._queued_prompt_refs else None
+        if ref is None or not any(message is ref for message in self.chat_messages):
+            ref = self._append_user_prompt(prompt)
+        index = self._chat_message_index(ref)
+        return list(self.chat_messages[: index + 1]), ref
+
+    def _chat_message_index(self, ref: ChatMessage) -> int:
+        return next(index for index, message in enumerate(self.chat_messages) if message is ref)
+
     def submit_command(self, text: str) -> None:
         """Handles one line submitted via CommandBar (`:` on DashboardScreen).
 
         A `gepa <script> ...` command launches immediately if no run is live,
-        or is appended to `pending_queue` if one is. A non-`gepa` prompt shows
-        the same stub notice InputScreen shows when nothing is live, but is
-        also queued (rather than shown immediately) when a run is live, so it
-        auto-advances in the same submitted order once its turn comes up
-        instead of jumping the queue. Malformed `gepa ...` syntax is reported
-        immediately either way -- parsing happens at submit time, not launch
-        time, so a bad command never even makes it into the queue.
+        or is appended to `pending_queue` if one is. A non-`gepa` prompt is
+        answered immediately when possible; while a run is live, its user
+        message is displayed/persisted immediately and the answer is queued in
+        submission order. Malformed `gepa ...` syntax is reported immediately
+        either way -- parsing happens at submit time, not launch time, so a bad
+        command never even makes it into the queue.
         """
         text = text.strip()
         if not text:
@@ -445,7 +525,7 @@ class AutumnApp(App):
 
         if self._run_is_live():
             if spec is None:
-                self._append_user_prompt(text)
+                self._queued_prompt_refs.append(self._append_user_prompt(text))
             self.pending_queue.append(item)
             self._persist_queue()
             self._refresh_queue_panel()
@@ -454,8 +534,11 @@ class AutumnApp(App):
         if spec is not None:
             self._launch_spec_now(spec)
         else:
-            self._append_user_prompt(text)
-            self._answer_prompt_async()
+            user_message = self._append_user_prompt(text)
+            self._answer_prompt_async(
+                prompt=text,
+                snapshot=list(self.chat_messages[: self._chat_message_index(user_message) + 1]),
+            )
 
     def _poll_queue_advance(self) -> None:
         state = self.state
@@ -464,9 +547,9 @@ class AutumnApp(App):
         if state.status is RunStatus.RUNNING:
             return
         # Stop watching this now-finished run so this fires exactly once per
-        # run, then work through the queue -- stub entries just show their
-        # notice and fall through to the next item, a gepa entry launches and
-        # returns (it re-points _queue_watch_state at the new run itself).
+        # run, then work through the queue -- prompt entries answer and resume
+        # queue advancement on completion; a gepa entry launches and returns
+        # (it re-points _queue_watch_state at the new run itself).
         self._queue_watch_state = None
         self._advance_queue()
 
@@ -476,8 +559,14 @@ class AutumnApp(App):
             self._persist_queue()
             self._refresh_queue_panel()
             if isinstance(item, str):
-                self._answer_prompt_async()
-                continue
+                snapshot, user_message = self._queued_prompt_context(item)
+                self._answer_prompt_async(
+                    prompt=item,
+                    snapshot=snapshot,
+                    insert_after=user_message,
+                    on_complete=self._advance_queue,
+                )
+                return
             self._launch_spec_now(item)
             return
         self._refresh_queue_panel()

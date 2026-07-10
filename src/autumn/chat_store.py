@@ -83,9 +83,12 @@ def discover_resumable(sessions_root: Path, own_path: Path) -> list[Path]:
         if path == own_path:
             continue
         session = _load_session(path)
-        if session is None or not session["messages"]:
+        if session is None:
             continue
         if pid_alive(session["pid"]):
+            continue
+        parsed = [_message_from_dict(raw) for raw in session["messages"]]
+        if not any(message is not None for message in parsed):
             continue
         resumable.append(path)
     resumable.sort(key=lambda p: p.stat().st_mtime)

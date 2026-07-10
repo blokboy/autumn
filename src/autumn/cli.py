@@ -130,7 +130,7 @@ def parse_gepa_command(tokens: list[str]) -> LaunchSpec:
 def parse_command_line(text: str) -> LaunchSpec | None:
     """Parses one submitted line of free text from either InputScreen or
     CommandBar into a `LaunchSpec`, or `None` if it isn't a `gepa ...` command
-    at all (a stub/non-`gepa` prompt) -- the shared classification both
+    at all (a chat prompt) -- the shared classification both
     surfaces use so they can't drift apart on what counts as a launch command.
 
     `text` is assumed already stripped and non-empty (both callers handle the

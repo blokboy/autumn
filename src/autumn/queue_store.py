@@ -8,7 +8,7 @@ normal quit, a crash, or `kill -9` never loses queued commands. Content shape:
     {"pid": <int>, "items": [<item>, ...]}
 
 Each item is either `{"kind": "gepa", "run_name", "run_dir", "script_path",
-"dry_run"}` (a `LaunchSpec`) or `{"kind": "prompt", "text": ...}` (a stub
+"dry_run"}` (a `LaunchSpec`) or `{"kind": "prompt", "text": ...}` (a chat
 prompt string), mirroring the `LaunchSpec | str` shape of `pending_queue`
 itself.
 

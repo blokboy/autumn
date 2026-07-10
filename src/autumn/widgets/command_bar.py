@@ -10,9 +10,10 @@ which is the whole point -- typing `gepa myscript.py` shouldn't also fire `q`
 for every letter that happens to collide with a binding.
 
 Submitting a line hands the raw text to `AutumnApp.submit_command`, which owns
-the launch-vs-queue decision (immediate launch, append to the pending queue,
-or a stub notice) -- this widget only renders input and an ordered preview of
-whatever queue AutumnApp currently holds, via `refresh_queue`.
+the launch-vs-queue decision for `gepa ...` commands and the shared chat
+prompt flow for everything else -- this widget only renders input and an
+ordered preview of whatever queue AutumnApp currently holds, via
+`refresh_queue`.
 """
 
 from autumn.cli import LaunchSpec
@@ -53,7 +54,7 @@ class CommandBar(Vertical):
     def compose(self) -> ComposeResult:
         yield Static("", id="queue-preview")
         yield Input(
-            placeholder=": gepa my_script.py --dry-run",
+            placeholder=": ask Autumn a question or gepa my_script.py --dry-run",
             id="command-bar-input",
         )
 
