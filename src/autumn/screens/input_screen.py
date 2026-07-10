@@ -70,7 +70,7 @@ _LOGO_LINES = (
     "█   █ █   █   █   █   █ █   █ █  ██",
     "█   █  ███    █    ███  █   █ █   █",
 )
-_HINT_TEXT = "Ask Autumn anything..."
+_HINT_TEXT = "A configurable CLI for LLMs"
 _FOOTER_HINT = "[#f0c17a]enter[/] browse   •   [#f0c17a]q[/] quit   •   [#f0c17a]?[/] help"
 
 
@@ -122,7 +122,7 @@ class InputScreen(Screen):
             yield Label("\n".join(_LOGO_LINES), classes="app-title")
             yield DeerSprite()
             yield Label(_HINT_TEXT, classes="input-hint")
-            yield _CommandInput(placeholder="Ask Autumn about your runs...", id="command-input")
+            yield _CommandInput(placeholder="Ask Autumn Anything...", id="command-input")
             yield Label(_FOOTER_HINT, classes="app-footer-hint")
 
     def on_mount(self) -> None:
