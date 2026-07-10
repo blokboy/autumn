@@ -31,7 +31,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from autumn import local_models, paths, registry
+from autumn import groq_policy, local_models, paths, registry
 
 _GEPA_PREFIX = "gepa "
 
@@ -237,6 +237,7 @@ def _run(args: argparse.Namespace) -> int:
         script_path=spec.script_path,
         dry_run=spec.dry_run,
         queue_sessions_root=paths.sessions_root(),
+        prompt_routing_policy=groq_policy.build_policy(),
     )
     app.run()
     return 0
@@ -245,7 +246,11 @@ def _run(args: argparse.Namespace) -> int:
 def _browse(args: argparse.Namespace) -> int:
     from autumn.app import AutumnApp
 
-    app = AutumnApp(runs_root=paths.default_runs_root(), queue_sessions_root=paths.sessions_root())
+    app = AutumnApp(
+        runs_root=paths.default_runs_root(),
+        queue_sessions_root=paths.sessions_root(),
+        prompt_routing_policy=groq_policy.build_policy(),
+    )
     app.run()
     return 0
 
