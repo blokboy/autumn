@@ -11,7 +11,7 @@ from autumn import chat_store, local_llm, local_models, model_router, palette, p
 from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
-from autumn.local_model_runner import LocalModelRunner
+from autumn.local_model_runner import LocalModelRunner, LocalModelRuntimeError
 from autumn.models import (
     ChatMessage,
     DashboardState,
@@ -292,6 +292,7 @@ class AutumnApp(App):
 
     def set_default_model(self, name: str) -> None:
         local_models.set_default(self._model_catalog_root, name)
+        self.notify(f"Default model set to {name}", severity="information")
 
     def _append_user_prompt(self, text: str) -> None:
         self.chat_messages.append(ChatMessage(role="user", text=text))
@@ -317,16 +318,25 @@ class AutumnApp(App):
                 policy=self._prompt_routing_policy,
             )
             if choice.backend == "llama.cpp" and choice.path is not None:
-                message = self._local_model_runner.generate(
-                    snapshot,
-                    LocalModel(
-                        name=choice.name,
-                        backend=choice.backend,
-                        path=choice.path,
-                        context_window=choice.context_window,
-                        is_default=True,
-                    ),
-                )
+                try:
+                    message = self._local_model_runner.generate(
+                        snapshot,
+                        LocalModel(
+                            name=choice.name,
+                            backend=choice.backend,
+                            path=choice.path,
+                            context_window=choice.context_window,
+                            is_default=True,
+                        ),
+                    )
+                except LocalModelRuntimeError as exc:
+                    choice = ModelChoice(
+                        name=local_llm.OFFLINE_TINY_MODEL,
+                        backend="builtin",
+                        path=None,
+                        reason=str(exc),
+                    )
+                    message = local_llm.generate_response(snapshot, choice)
             elif choice.backend == "provider":
                 choice = ModelChoice(
                     name=local_llm.OFFLINE_TINY_MODEL,

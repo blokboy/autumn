@@ -23,6 +23,9 @@ def choose_model(
     installed_default = next((model for model in models if model.is_default), None)
     if installed_default is not None:
         if not runtime_available(installed_default):
+            provider_model = _choose_provider_model(policy)
+            if provider_model is not None:
+                return _provider_choice(provider_model)
             return ModelChoice(
                 name=local_llm.OFFLINE_TINY_MODEL,
                 backend="builtin",
@@ -38,14 +41,7 @@ def choose_model(
         )
     provider_model = _choose_provider_model(policy)
     if provider_model is not None:
-        return ModelChoice(
-            name=provider_model.name,
-            backend="provider",
-            path=None,
-            reason="provider available",
-            provider=provider_model.provider,
-            account_id=provider_model.account_id,
-        )
+        return _provider_choice(provider_model)
     return ModelChoice(
         name=local_llm.OFFLINE_TINY_MODEL,
         backend="builtin",
@@ -58,6 +54,17 @@ def _is_runtime_available(model: LocalModel) -> bool:
     if model.backend == "llama.cpp":
         return model.path.exists() and shutil.which("llama-cli") is not None
     return False
+
+
+def _provider_choice(provider_model: ProviderModel) -> ModelChoice:
+    return ModelChoice(
+        name=provider_model.name,
+        backend="provider",
+        path=None,
+        reason="provider available",
+        provider=provider_model.provider,
+        account_id=provider_model.account_id,
+    )
 
 
 def _choose_provider_model(policy: PromptRoutingPolicy | None) -> ProviderModel | None:

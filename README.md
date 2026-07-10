@@ -23,7 +23,7 @@ twine upload dist/*
 autumn
 ```
 
-Bare `autumn` opens on a landing screen with a single input field. Press Enter on an empty line to drop into browse mode: it scans the runs directory (`$XDG_DATA_HOME/autumn/runs`, falling back to `~/.local/share/autumn/runs`) and lets you browse any past run's full Overview/Candidates/Log/Chat tabs, reading straight from GEPA's own on-disk JSON files. Move the sidebar cursor (arrows or `j`/`k`) to preview a different run. Typing `gepa <script.py> [--dry-run] [--name ...] [--run-dir ...]` launches a live run identically to `autumn run <script.py>` below, without leaving the TUI. Any other non-empty input becomes a dashboard chat prompt, persisted for the life of the session and offered for resume if the process exits before the transcript is cleared.
+Bare `autumn` opens on a landing screen with a single input field. Press Enter on an empty line to drop into browse mode: it scans the runs directory (`$XDG_DATA_HOME/autumn/runs`, falling back to `~/.local/share/autumn/runs`) and lets you browse any past run's full Overview/Candidates/Log/Chat/Models tabs, reading straight from GEPA's own on-disk JSON files. Move the sidebar cursor (arrows or `j`/`k`) to preview a different run. Typing `gepa <script.py> [--dry-run] [--name ...] [--run-dir ...]` launches a live run identically to `autumn run <script.py>` below, without leaving the TUI. Any other non-empty input becomes a dashboard chat prompt, persisted for the life of the session and offered for resume if the process exits before the transcript is cleared.
 
 Once inside the dashboard, press `:` to focus the persistent command bar at the bottom. Submitting a `gepa <script.py> ...` command there launches it immediately if nothing is running, or appends it to a visible, in-memory queue if a run is already live -- the next queued item auto-starts as soon as the current run finishes or is stopped. Submitting any other text appends it to the dashboard chat and answers asynchronously with the selected local model policy.
 
@@ -40,7 +40,9 @@ autumn models default tiny
 autumn models remove tiny
 ```
 
-Manages Autumn's local model catalog under `$XDG_DATA_HOME/autumn/models` (falling back to `~/.local/share/autumn/models`). Installed model files are copied into Autumn's managed catalog, one model can be marked as the default, and `autumn models list --json` prints the catalog for scripting. The current dashboard responder still uses the built-in offline fallback unless a future runtime integration can execute the selected model.
+Manages Autumn's local model catalog under `$XDG_DATA_HOME/autumn/models` (falling back to `~/.local/share/autumn/models`). Installed model files are copied into Autumn's managed catalog, one model can be marked as the default, and `autumn models list --json` prints the catalog for scripting. The dashboard's Models tab shows the installed catalog and lets you press `d` to make the highlighted model the default.
+
+For `llama.cpp` models, Autumn runs the selected default through `llama-cli` when both the model file and runtime are available. If `llama-cli` is not on `PATH`, set `AUTUMN_LLAMA_CLI=/path/to/llama-cli`. When the runtime is unavailable or fails, the Chat tab falls back to `autumn/offline-tiny` and shows the reason above the transcript.
 
 ```bash
 autumn run <script.py> --dry-run

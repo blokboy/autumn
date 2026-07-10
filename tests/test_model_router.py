@@ -59,6 +59,41 @@ def test_router_falls_back_when_default_model_runtime_is_missing(tmp_path):
     assert choice.reason == "runtime missing for tiny"
 
 
+def test_router_uses_provider_when_default_local_runtime_is_missing(tmp_path):
+    model_path = tmp_path / "models" / "tiny" / "tiny.gguf"
+    choice = model_router.choose_model(
+        prompt="hello",
+        catalog_root=tmp_path / "models",
+        available_models=[
+            LocalModel(
+                name="tiny",
+                backend="llama.cpp",
+                path=model_path,
+                context_window=2048,
+                is_default=True,
+            )
+        ],
+        is_runtime_available=lambda model: False,
+        policy=PromptRoutingPolicy(
+            provider_accounts=[
+                ProviderAccount(provider="claude", account_id="personal", is_signed_in=True)
+            ],
+            provider_models=[
+                ProviderModel(
+                    name="claude/sonnet",
+                    provider="claude",
+                    account_id="personal",
+                    priority=10,
+                )
+            ],
+        ),
+    )
+
+    assert choice.name == "claude/sonnet"
+    assert choice.backend == "provider"
+    assert choice.reason == "provider available"
+
+
 def test_router_uses_available_provider_candidate_when_no_local_model_exists(tmp_path):
     choice = model_router.choose_model(
         prompt="hello",

@@ -8,6 +8,8 @@ from autumn.models import LocalModel
 
 
 def _summary(models: list[LocalModel]) -> str:
+    if not models:
+        return "No local models installed. Use `autumn models install` to add one."
     count = len(models)
     noun = "model" if count == 1 else "models"
     default = next((model.name for model in models if model.is_default), "--")

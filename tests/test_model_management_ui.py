@@ -38,3 +38,21 @@ async def test_models_tab_lists_installed_models_and_sets_default(tmp_path):
         assert local_models.get_default(catalog_root).name == "second"
         summary = view.query_one("#model-catalog-summary", Static).content
         assert "Default: second" in str(summary)
+        notifications = list(app._notifications)
+        assert any("Default model set to second" in notification.message for notification in notifications)
+
+
+async def test_models_tab_shows_empty_state_when_no_models_are_installed(tmp_path):
+    app = AutumnApp(runs_root=tmp_path, model_catalog_root=tmp_path / "models")
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        app.screen.query_one(TabbedContent).active = "models-tab"
+        await pilot.pause()
+
+        view = app.screen.query_one("#models", ModelCatalogView)
+        summary = view.query_one("#model-catalog-summary", Static).content
+        assert "No local models installed" in str(summary)
