@@ -1,12 +1,13 @@
 """Behavioral tests for InputScreen: the bare-`autumn` landing screen and its
 three submit paths (empty Enter -> browse, `gepa ...` -> live launch, anything
-else -> stub notice), via Textual's Pilot harness against a real AutumnApp
-constructed the same way cli.py's `_browse()` does (no run_name/run_dir).
+else -> shared chat prompt), via Textual's Pilot harness against a real
+AutumnApp constructed the same way cli.py's `_browse()` does (no
+run_name/run_dir).
 """
 
 import asyncio
 
-from textual.widgets import Input
+from textual.widgets import Input, Label
 
 from autumn.app import AutumnApp
 from autumn.models import ChatMessage, RunStatus
@@ -35,6 +36,18 @@ async def test_bare_autumn_opens_input_screen_first(tmp_path):
         await pilot.pause()
         assert isinstance(app.screen, InputScreen)
         assert app.state is None
+
+
+async def test_landing_copy_invites_autumn_questions(tmp_path):
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        hint = app.screen.query_one(".input-hint", Label)
+        command_input = app.screen.query_one("#command-input", Input)
+
+        assert str(hint.content) == "Ask Autumn anything..."
+        assert command_input.placeholder == "Ask Autumn about your runs..."
 
 
 async def test_empty_enter_transitions_to_browse_dashboard(tmp_path):

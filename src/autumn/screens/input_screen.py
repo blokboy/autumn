@@ -24,12 +24,19 @@ from textual.widgets import Input, Label
 from autumn.cli import LaunchSpecError, parse_command_line
 
 # Mirrors torlink's Splash (src/ui/views/Splash.tsx): centered borderless
-# column -- title, dim descriptive line, input, dot-separated keybind footer
-# in the accent-secondary "keybinding hints" shade (see palette.ACCENT_SECONDARY).
-_HINT_TEXT = (
-    "Ask Autumn a question, press Enter empty to browse runs, or use "
-    "`gepa <script.py> [--dry-run] [--name ...] [--run-dir ...]` to launch one."
+# column -- big block-letter logo, dim descriptive line, input, dot-separated
+# keybind footer in the accent-secondary "keybinding hints" shade (see
+# palette.ACCENT_SECONDARY). Logo lines are a hardcoded 5-row block font
+# (torlink's own LOGO_LINES in src/ui/logo.ts is likewise a literal, not a
+# generic font engine -- only "autumn" needs rendering here).
+_LOGO_LINES = (
+    " ███  █   █ █████ █   █ █   █ █   █",
+    "█   █ █   █   █   █   █ ██ ██ ██  █",
+    "█████ █   █   █   █   █ █ █ █ █ █ █",
+    "█   █ █   █   █   █   █ █   █ █  ██",
+    "█   █  ███    █    ███  █   █ █   █",
 )
+_HINT_TEXT = "Ask Autumn anything..."
 _FOOTER_HINT = "[#f0c17a]enter[/] browse   •   [#f0c17a]q[/] quit   •   [#f0c17a]?[/] help"
 
 
@@ -47,6 +54,7 @@ class InputScreen(Screen):
     }
     InputScreen .app-title {
         width: 100%;
+        height: auto;
         content-align: center middle;
         text-style: bold;
         color: #d98e4a;
@@ -71,7 +79,7 @@ class InputScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="input-screen-frame"):
-            yield Label("autumn", classes="app-title")
+            yield Label("\n".join(_LOGO_LINES), classes="app-title")
             yield Label(_HINT_TEXT, classes="input-hint")
             yield Input(placeholder="Ask Autumn about your runs...", id="command-input")
             yield Label(_FOOTER_HINT, classes="app-footer-hint")
