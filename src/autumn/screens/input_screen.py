@@ -8,9 +8,8 @@ Three behaviors, all decided from one submitted line of text:
   `autumn.cli.parse_command_line` (shared with `DashboardScreen`'s CommandBar,
   so the two surfaces can't drift) and handed to `AutumnApp.launch_gepa_run`
   to launch identically to `autumn run <script>`.
-- Anything else non-empty -> a stub "not implemented yet" notice. No
-  LLM/agent invocation is wired up in this pass; this is just the landing
-  spot for that future command language.
+- Anything else non-empty -> a shared Autumn chat prompt, shown on the
+  dashboard and answered by the available local/fallback model path.
 
 Bad `gepa ...` syntax (unknown flags, missing/nonexistent script) shows an
 error notification and leaves the user on this screen rather than crashing or
@@ -24,6 +23,15 @@ from textual.widgets import Input, Label
 
 from autumn.cli import LaunchSpecError, parse_command_line
 
+# Mirrors torlink's Splash (src/ui/views/Splash.tsx): centered borderless
+# column -- title, dim descriptive line, input, dot-separated keybind footer
+# in the accent-secondary "keybinding hints" shade (see palette.ACCENT_SECONDARY).
+_HINT_TEXT = (
+    "Ask Autumn a question, press Enter empty to browse runs, or use "
+    "`gepa <script.py> [--dry-run] [--name ...] [--run-dir ...]` to launch one."
+)
+_FOOTER_HINT = "[#f0c17a]enter[/] browse   •   [#f0c17a]q[/] quit   •   [#f0c17a]?[/] help"
+
 
 class InputScreen(Screen):
     """Landing screen shown for browse-only `AutumnApp` construction (bare `autumn`)."""
@@ -33,9 +41,9 @@ class InputScreen(Screen):
         align: center middle;
     }
     InputScreen #input-screen-frame {
-        width: 80%;
-        max-width: 100;
+        width: auto;
         height: auto;
+        align: center middle;
     }
     InputScreen .app-title {
         width: 100%;
@@ -44,27 +52,29 @@ class InputScreen(Screen):
         color: #d98e4a;
         margin-bottom: 1;
     }
-    InputScreen #command-box {
-        height: auto;
-        border: round #d98e4a;
-        padding: 1 2;
-    }
     InputScreen .input-hint {
-        color: #a9906f;
+        width: 100%;
+        content-align: center middle;
+        text-opacity: 55%;
         margin-bottom: 1;
+    }
+    InputScreen #command-input {
+        width: 62;
+    }
+    InputScreen .app-footer-hint {
+        width: 100%;
+        content-align: center middle;
+        text-opacity: 70%;
+        margin-top: 1;
     }
     """
 
     def compose(self) -> ComposeResult:
         with Vertical(id="input-screen-frame"):
             yield Label("autumn", classes="app-title")
-            with Vertical(id="command-box"):
-                yield Label(
-                    "Enter to browse runs, or `gepa <script.py> [--dry-run] [--name ...] "
-                    "[--run-dir ...]` to launch one.",
-                    classes="input-hint",
-                )
-                yield Input(placeholder="gepa my_script.py --dry-run", id="command-input")
+            yield Label(_HINT_TEXT, classes="input-hint")
+            yield Input(placeholder="Ask Autumn about your runs...", id="command-input")
+            yield Label(_FOOTER_HINT, classes="app-footer-hint")
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
