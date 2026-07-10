@@ -61,6 +61,35 @@ class LocalModel:
 
 
 @dataclass
+class ProviderAccount:
+    """A signed-in external provider account available for future prompt routing."""
+
+    provider: str
+    account_id: str
+    display_name: str | None = None
+    is_signed_in: bool = False
+
+
+@dataclass
+class ProviderModel:
+    """A provider-backed model candidate advertised by an account."""
+
+    name: str
+    provider: str
+    account_id: str
+    is_enabled: bool = True
+    priority: int = 100
+
+
+@dataclass
+class PromptRoutingPolicy:
+    """Provider/account candidates considered after runnable local models."""
+
+    provider_accounts: list[ProviderAccount] = field(default_factory=list)
+    provider_models: list[ProviderModel] = field(default_factory=list)
+
+
+@dataclass
 class ModelChoice:
     """The model selected to answer a dashboard prompt."""
 
@@ -68,6 +97,9 @@ class ModelChoice:
     backend: str
     path: Path | None
     reason: str
+    context_window: int | None = None
+    provider: str | None = None
+    account_id: str | None = None
 
 
 @dataclass

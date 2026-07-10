@@ -15,13 +15,14 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import ListView, TabbedContent, TabPane
 
-from autumn import registry
+from autumn import local_models, registry
 from autumn.models import DashboardState, RunStatus
 from autumn.models import ChatMessage
 from autumn.widgets.chat_view import ChatView
 from autumn.widgets.candidates_table import CandidatesTable
 from autumn.widgets.command_bar import CommandBar
 from autumn.widgets.log_view import LogView
+from autumn.widgets.model_catalog_view import ModelCatalogView
 from autumn.widgets.overview_pane import OverviewPane
 from autumn.widgets.run_sidebar import RunListItem, RunSidebar
 
@@ -62,6 +63,7 @@ class DashboardScreen(Screen):
 
     BINDINGS = [
         Binding(":", "focus_command_bar", "Command", show=True),
+        Binding("d", "set_default_model", "Set default model", show=True),
     ]
 
     def __init__(
@@ -69,15 +71,19 @@ class DashboardScreen(Screen):
         runs_root: Path,
         live_state: DashboardState | None = None,
         chat_messages: list[ChatMessage] | None = None,
+        chat_model_status: str | None = None,
+        model_catalog_root: Path | None = None,
         *args,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._runs_root = Path(runs_root)
+        self._model_catalog_root = model_catalog_root
         self._live_state = live_state
         self._live_run_dir = live_state.run_dir if live_state is not None else None
         self._summaries = registry.merge_live(registry.scan(self._runs_root), live_state)
         self._chat_messages = chat_messages or []
+        self._chat_model_status = chat_model_status
         self._last_seen_live_version = live_state.version if live_state is not None else -1
 
         initial = self._summaries[0] if self._summaries else None
@@ -98,7 +104,19 @@ class DashboardScreen(Screen):
                 yield TabPane("Overview", OverviewPane(self._displayed_state, id="overview"))
                 yield TabPane("Candidates", CandidatesTable(self._displayed_state, id="candidates"))
                 yield TabPane("Log", LogView(self._displayed_state, id="log"))
-                yield TabPane("Chat", ChatView(self._chat_messages, id="chat"))
+                yield TabPane(
+                    "Chat",
+                    ChatView(
+                        self._chat_messages,
+                        model_status=self._chat_model_status,
+                        id="chat",
+                    ),
+                )
+                yield TabPane(
+                    "Models",
+                    ModelCatalogView(self._models(), id="models"),
+                    id="models-tab",
+                )
         yield CommandBar(id="command-bar")
 
     def on_mount(self) -> None:
@@ -108,14 +126,35 @@ class DashboardScreen(Screen):
     def action_focus_command_bar(self) -> None:
         self.query_one(CommandBar).focus_input()
 
+    def action_set_default_model(self) -> None:
+        view = self.query_one("#models", ModelCatalogView)
+        selected = view.selected_model_name
+        if selected is None:
+            return
+        self.app.set_default_model(selected)
+        self.refresh_models()
+
+    def _models(self) -> list[local_models.LocalModel]:
+        if self._model_catalog_root is None:
+            return []
+        return local_models.list_models(self._model_catalog_root)
+
+    def refresh_models(self) -> None:
+        self.query_one("#models", ModelCatalogView).refresh_from_models(self._models())
+
     def refresh_queue(self, items: list) -> None:
         """Called by AutumnApp whenever `pending_queue` changes, so the bar's
         preview line always mirrors the app's actual queue state."""
         self.query_one(CommandBar).refresh_queue(items)
 
-    def refresh_chat(self, messages: list[ChatMessage]) -> None:
+    def refresh_chat(
+        self,
+        messages: list[ChatMessage],
+        model_status: str | None = None,
+    ) -> None:
         self._chat_messages = messages
-        self.query_one("#chat", ChatView).refresh_from_messages(messages)
+        self._chat_model_status = model_status
+        self.query_one("#chat", ChatView).refresh_from_messages(messages, model_status)
 
     def on_list_view_highlighted(self, message: ListView.Highlighted) -> None:
         item = message.item

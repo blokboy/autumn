@@ -7,11 +7,20 @@ from pathlib import Path
 from textual.app import App
 from textual.theme import Theme
 
-from autumn import chat_store, local_llm, model_router, palette, paths, queue_store, runner
+from autumn import chat_store, local_llm, local_models, model_router, palette, paths, queue_store, runner
 from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
-from autumn.models import ChatMessage, DashboardState, LiveRunSpec, RunStatus
+from autumn.local_model_runner import LocalModelRunner
+from autumn.models import (
+    ChatMessage,
+    DashboardState,
+    LiveRunSpec,
+    LocalModel,
+    ModelChoice,
+    PromptRoutingPolicy,
+    RunStatus,
+)
 from autumn.screens.confirm_screen import ConfirmScreen
 from autumn.screens.dashboard_screen import DashboardScreen
 from autumn.screens.help_screen import HelpScreen
@@ -62,6 +71,12 @@ def _resume_prompt_message(
     return "Found " + " and ".join(parts) + "."
 
 
+def _model_status_from_choice(choice: ModelChoice) -> str:
+    if choice.backend == "builtin":
+        return f"Fallback: {choice.reason}"
+    return f"Model: {choice.name} ({choice.reason})"
+
+
 # How often to check whether this process's own live run has left RUNNING, so
 # the next queued command bar item (if any) can auto-start. Coarser than a
 # rendering concern -- reuses the same lightweight-timer-poll idiom
@@ -96,6 +111,9 @@ class AutumnApp(App):
         queue_sessions_root: Path | None = None,
         chat_sessions_root: Path | None = None,
         model_catalog_root: Path | None = None,
+        local_model_runner: LocalModelRunner | None = None,
+        is_model_runtime_available: model_router.RuntimeAvailability | None = None,
+        prompt_routing_policy: PromptRoutingPolicy | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(_AUTUMN_THEME)
@@ -120,7 +138,11 @@ class AutumnApp(App):
             self._chat_sessions_root, chat_store.new_session_id()
         )
         self.chat_messages: list[ChatMessage] = []
+        self._chat_model_status: str | None = None
         self._model_catalog_root = model_catalog_root or paths.models_root()
+        self._local_model_runner = local_model_runner or LocalModelRunner()
+        self._is_model_runtime_available = is_model_runtime_available
+        self._prompt_routing_policy = prompt_routing_policy
 
         # Launch mode iff both run_name and run_dir are given (cli.py's `run`
         # subcommand always supplies both together); otherwise this is
@@ -158,7 +180,11 @@ class AutumnApp(App):
             # screen, which by the time `r` is pressed could be a ConfirmScreen
             # modal pushed on top of it.
             self._dashboard_screen = DashboardScreen(
-                self.runs_root, live_state=self.state, chat_messages=self.chat_messages
+                self.runs_root,
+                live_state=self.state,
+                chat_messages=self.chat_messages,
+                chat_model_status=self._chat_model_status,
+                model_catalog_root=self._model_catalog_root,
             )
             self.push_screen(self._dashboard_screen)
             self._start_live_run()
@@ -208,7 +234,10 @@ class AutumnApp(App):
                 # launch-mode branch above also does from this same base
                 # screen) is the correct call here.
                 self._dashboard_screen = DashboardScreen(
-                    self.runs_root, chat_messages=self.chat_messages
+                    self.runs_root,
+                    chat_messages=self.chat_messages,
+                    chat_model_status=self._chat_model_status,
+                    model_catalog_root=self._model_catalog_root,
                 )
                 self.push_screen(self._dashboard_screen)
                 # DashboardScreen mounts asynchronously -- _advance_queue's
@@ -250,23 +279,32 @@ class AutumnApp(App):
         `_browse()`'s launch-mode-free `AutumnApp` construction produces (no
         live_state), swapped in for InputScreen with `switch_screen` rather
         than pushed on top of it -- there's nothing to go "back" to."""
-        self._dashboard_screen = DashboardScreen(self.runs_root, chat_messages=self.chat_messages)
+        self._dashboard_screen = DashboardScreen(
+            self.runs_root,
+            chat_messages=self.chat_messages,
+            chat_model_status=self._chat_model_status,
+            model_catalog_root=self._model_catalog_root,
+        )
         self.switch_screen(self._dashboard_screen)
 
     def _persist_chat(self) -> None:
         chat_store.persist_chat(self._chat_session_path, self.chat_messages, pid=os.getpid())
 
+    def set_default_model(self, name: str) -> None:
+        local_models.set_default(self._model_catalog_root, name)
+
     def _append_user_prompt(self, text: str) -> None:
         self.chat_messages.append(ChatMessage(role="user", text=text))
         self._persist_chat()
         if hasattr(self, "_dashboard_screen"):
-            self._dashboard_screen.refresh_chat(self.chat_messages)
+            self._dashboard_screen.refresh_chat(self.chat_messages, self._chat_model_status)
 
-    def _append_assistant_reply(self, message: ChatMessage) -> None:
+    def _append_assistant_reply(self, message: ChatMessage, choice: ModelChoice) -> None:
         self.chat_messages.append(message)
+        self._chat_model_status = _model_status_from_choice(choice)
         self._persist_chat()
         if hasattr(self, "_dashboard_screen"):
-            self._dashboard_screen.refresh_chat(self.chat_messages)
+            self._dashboard_screen.refresh_chat(self.chat_messages, self._chat_model_status)
 
     def _answer_prompt_async(self) -> None:
         snapshot = list(self.chat_messages)
@@ -275,15 +313,42 @@ class AutumnApp(App):
             choice = model_router.choose_model(
                 prompt=snapshot[-1].text if snapshot else "",
                 catalog_root=self._model_catalog_root,
+                is_runtime_available=self._is_model_runtime_available,
+                policy=self._prompt_routing_policy,
             )
-            message = local_llm.generate_response(snapshot, choice)
-            self.call_from_thread(self._append_assistant_reply, message)
+            if choice.backend == "llama.cpp" and choice.path is not None:
+                message = self._local_model_runner.generate(
+                    snapshot,
+                    LocalModel(
+                        name=choice.name,
+                        backend=choice.backend,
+                        path=choice.path,
+                        context_window=choice.context_window,
+                        is_default=True,
+                    ),
+                )
+            elif choice.backend == "provider":
+                choice = ModelChoice(
+                    name=local_llm.OFFLINE_TINY_MODEL,
+                    backend="builtin",
+                    path=None,
+                    reason=f"provider {choice.name} not executable yet",
+                )
+                message = local_llm.generate_response(snapshot, choice)
+            else:
+                message = local_llm.generate_response(snapshot, choice)
+            self.call_from_thread(self._append_assistant_reply, message, choice)
 
         threading.Thread(target=run, daemon=True).start()
 
     def open_chat_prompt(self, text: str) -> None:
         self._append_user_prompt(text)
-        self._dashboard_screen = DashboardScreen(self.runs_root, chat_messages=self.chat_messages)
+        self._dashboard_screen = DashboardScreen(
+            self.runs_root,
+            chat_messages=self.chat_messages,
+            chat_model_status=self._chat_model_status,
+            model_catalog_root=self._model_catalog_root,
+        )
         self.switch_screen(self._dashboard_screen)
         self.call_after_refresh(self._answer_prompt_async)
 
@@ -312,7 +377,11 @@ class AutumnApp(App):
         construction + `on_mount` do together for `autumn run <script>`."""
         state = self._adopt_live_spec(spec)
         self._dashboard_screen = DashboardScreen(
-            self.runs_root, live_state=state, chat_messages=self.chat_messages
+            self.runs_root,
+            live_state=state,
+            chat_messages=self.chat_messages,
+            chat_model_status=self._chat_model_status,
+            model_catalog_root=self._model_catalog_root,
         )
         self.switch_screen(self._dashboard_screen)
         self._start_live_run()
