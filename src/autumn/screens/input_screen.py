@@ -22,6 +22,7 @@ from textual.screen import Screen
 from textual.widgets import Input, Label
 
 from autumn.cli import LaunchSpecError, parse_command_line
+from autumn.widgets.deer_sprite import DeerSprite
 
 # Mirrors torlink's Splash (src/ui/views/Splash.tsx): centered borderless
 # column -- big block-letter logo, dim descriptive line, input, dot-separated
@@ -60,6 +61,12 @@ class InputScreen(Screen):
         color: #d98e4a;
         margin-bottom: 1;
     }
+    InputScreen DeerSprite {
+        width: 100%;
+        height: auto;
+        content-align: center middle;
+        margin-bottom: 1;
+    }
     InputScreen .input-hint {
         width: 100%;
         content-align: center middle;
@@ -80,6 +87,7 @@ class InputScreen(Screen):
     def compose(self) -> ComposeResult:
         with Vertical(id="input-screen-frame"):
             yield Label("\n".join(_LOGO_LINES), classes="app-title")
+            yield DeerSprite()
             yield Label(_HINT_TEXT, classes="input-hint")
             yield Input(placeholder="Ask Autumn about your runs...", id="command-input")
             yield Label(_FOOTER_HINT, classes="app-footer-hint")
