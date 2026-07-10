@@ -25,6 +25,8 @@ autumn
 
 Bare `autumn` opens on a landing screen with a single input field. Press Enter on an empty line to drop into browse mode: it scans the runs directory (`$XDG_DATA_HOME/autumn/runs`, falling back to `~/.local/share/autumn/runs`) and lets you browse any past run's full Overview/Candidates/Log tabs, reading straight from GEPA's own on-disk JSON files. Move the sidebar cursor (arrows or `j`/`k`) to preview a different run. Typing `gepa <script.py> [--dry-run] [--name ...] [--run-dir ...]` instead launches a live run identically to `autumn run <script.py>` below, without leaving the TUI.
 
+Once inside the dashboard, press `:` to focus the persistent command bar at the bottom. Submitting a `gepa <script.py> ...` command there launches it immediately if nothing is running, or appends it to a visible, in-memory queue if a run is already live -- the next queued item auto-starts as soon as the current run finishes or is stopped.
+
 ```bash
 autumn runs [--json]
 ```

@@ -10,6 +10,7 @@ this screen.
 from pathlib import Path
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import ListView, TabbedContent, TabPane
@@ -17,6 +18,7 @@ from textual.widgets import ListView, TabbedContent, TabPane
 from autumn import registry
 from autumn.models import DashboardState, RunStatus
 from autumn.widgets.candidates_table import CandidatesTable
+from autumn.widgets.command_bar import CommandBar
 from autumn.widgets.log_view import LogView
 from autumn.widgets.overview_pane import OverviewPane
 from autumn.widgets.run_sidebar import RunListItem, RunSidebar
@@ -56,6 +58,10 @@ class DashboardScreen(Screen):
     }
     """
 
+    BINDINGS = [
+        Binding(":", "focus_command_bar", "Command", show=True),
+    ]
+
     def __init__(
         self,
         runs_root: Path,
@@ -88,10 +94,19 @@ class DashboardScreen(Screen):
                 yield TabPane("Overview", OverviewPane(self._displayed_state, id="overview"))
                 yield TabPane("Candidates", CandidatesTable(self._displayed_state, id="candidates"))
                 yield TabPane("Log", LogView(self._displayed_state, id="log"))
+        yield CommandBar(id="command-bar")
 
     def on_mount(self) -> None:
         self.set_interval(_POLL_INTERVAL_SECONDS, self._poll_live_state)
         self.set_interval(_REGISTRY_POLL_INTERVAL_SECONDS, self._rescan_registry)
+
+    def action_focus_command_bar(self) -> None:
+        self.query_one(CommandBar).focus_input()
+
+    def refresh_queue(self, items: list) -> None:
+        """Called by AutumnApp whenever `pending_queue` changes, so the bar's
+        preview line always mirrors the app's actual queue state."""
+        self.query_one(CommandBar).refresh_queue(items)
 
     def on_list_view_highlighted(self, message: ListView.Highlighted) -> None:
         item = message.item

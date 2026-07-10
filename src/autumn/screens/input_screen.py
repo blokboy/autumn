@@ -4,10 +4,10 @@ Three behaviors, all decided from one submitted line of text:
 
 - Empty Enter -> browse mode (`AutumnApp.enter_browse_mode`), same as bare
   `autumn` used to land on directly before this screen existed.
-- `gepa <script> [--dry-run] [--name ...] [--run-dir ...]` -> parsed with the
-  exact grammar `autumn run` uses (`autumn.cli.parse_gepa_command`, extracted
-  from the `run` subcommand so the two can't drift) and handed to
-  `AutumnApp.launch_gepa_run` to launch identically to `autumn run <script>`.
+- `gepa <script> [--dry-run] [--name ...] [--run-dir ...]` -> parsed via
+  `autumn.cli.parse_command_line` (shared with `DashboardScreen`'s CommandBar,
+  so the two surfaces can't drift) and handed to `AutumnApp.launch_gepa_run`
+  to launch identically to `autumn run <script>`.
 - Anything else non-empty -> a stub "not implemented yet" notice. No
   LLM/agent invocation is wired up in this pass; this is just the landing
   spot for that future command language.
@@ -17,16 +17,12 @@ error notification and leaves the user on this screen rather than crashing or
 navigating away.
 """
 
-import shlex
-
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Input, Label
 
-from autumn.cli import LaunchSpecError, parse_gepa_command
-
-_GEPA_PREFIX = "gepa "
+from autumn.cli import LaunchSpecError, parse_command_line
 
 
 class InputScreen(Screen):
@@ -67,22 +63,15 @@ class InputScreen(Screen):
         if not text:
             self.app.enter_browse_mode()
             return
-        if text.startswith(_GEPA_PREFIX):
-            self._handle_gepa_command(text[len(_GEPA_PREFIX) :])
-            return
-        self.notify("Prompt execution not implemented yet", severity="warning")
-
-    def _handle_gepa_command(self, remainder: str) -> None:
-        try:
-            tokens = shlex.split(remainder)
-        except ValueError as exc:  # unbalanced quotes, e.g. `gepa "foo`
-            self.notify(f"Couldn't parse command: {exc}", severity="error")
-            return
 
         try:
-            spec = parse_gepa_command(tokens)
+            spec = parse_command_line(text)
         except LaunchSpecError as exc:
             self.notify(str(exc), severity="error")
+            return
+
+        if spec is None:
+            self.notify("Prompt execution not implemented yet", severity="warning")
             return
 
         self.app.launch_gepa_run(spec)

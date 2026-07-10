@@ -6,7 +6,7 @@ from pathlib import Path
 from textual.app import App
 
 from autumn import runner
-from autumn.cli import LaunchSpec
+from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
 from autumn.models import DashboardState, LiveRunSpec, RunStatus
@@ -19,6 +19,14 @@ _QUIT_WHILE_RUNNING_MESSAGE = (
     "Quitting will terminate the in-progress run immediately. "
     "Press Q instead to stop cleanly."
 )
+
+# How often to check whether this process's own live run has left RUNNING, so
+# the next queued command bar item (if any) can auto-start. Coarser than a
+# rendering concern -- reuses the same lightweight-timer-poll idiom
+# DashboardScreen already uses for its own live-state/registry polling, since
+# DashboardState is a plain dataclass mutated from a background thread, not a
+# Textual reactive/message emitter.
+_QUEUE_POLL_INTERVAL_SECONDS = 0.2
 
 
 class AutumnApp(App):
@@ -61,6 +69,17 @@ class AutumnApp(App):
             self.state = None
             self._dashboard_callback = None
 
+        # In-memory-only queue of commands submitted via CommandBar while a
+        # run was already live (see submit_command below); each entry is
+        # either a LaunchSpec (a `gepa ...` command) or a plain str (a stub
+        # prompt, queued only so it auto-advances in the same order it was
+        # submitted). `_queue_watch_state` is whichever DashboardState
+        # `_poll_queue_advance` is currently watching for a RUNNING -> terminal
+        # transition -- always `self.state` as of the last time a live run was
+        # (re)started, so the poll never fires twice for the same run.
+        self.pending_queue: list[LaunchSpec | str] = []
+        self._queue_watch_state: DashboardState | None = self.state
+
     def on_mount(self) -> None:
         # Launch mode (both run_name/run_dir given, cli.py's `run` subcommand)
         # goes straight to the dashboard, unaffected by InputScreen below.
@@ -80,6 +99,8 @@ class AutumnApp(App):
             self._start_live_run()
         else:
             self.push_screen(InputScreen())
+
+        self.set_interval(_QUEUE_POLL_INTERVAL_SECONDS, self._poll_queue_advance)
 
     def _start_live_run(self) -> None:
         """Kicks off this process's live run on a background thread (dry-run
@@ -110,10 +131,14 @@ class AutumnApp(App):
         self._dashboard_screen = DashboardScreen(self.runs_root)
         self.switch_screen(self._dashboard_screen)
 
-    def launch_gepa_run(self, spec: LaunchSpec) -> None:
-        """InputScreen's `gepa <script> ...` path: promotes this already-mounted,
-        browse-only AutumnApp into a live run, identically to what launch-mode
-        construction + `on_mount` do together for `autumn run <script>`."""
+    def _adopt_live_spec(self, spec: LaunchSpec) -> DashboardState:
+        """Updates run_name/run_dir/script_path/dry_run and constructs a fresh
+        DashboardState + DashboardCallback for `spec`, without deciding how the
+        dashboard screen should reflect it -- callers differ: `launch_gepa_run`
+        needs a DashboardScreen that doesn't exist yet, while CommandBar's
+        immediate-launch and queue-auto-advance paths promote an already-mounted
+        one. Also (re)points `_queue_watch_state` at the new state, so
+        `_poll_queue_advance` watches whichever run is live now."""
         self.run_name = spec.run_name
         self.run_dir = spec.run_dir
         self.script_path = spec.script_path
@@ -122,10 +147,91 @@ class AutumnApp(App):
         state = DashboardState(run_name=spec.run_name, run_dir=spec.run_dir)
         self.state = state
         self._dashboard_callback = DashboardCallback(self, state)
+        self._queue_watch_state = state
+        return state
 
+    def launch_gepa_run(self, spec: LaunchSpec) -> None:
+        """InputScreen's `gepa <script> ...` path: promotes this already-mounted,
+        browse-only AutumnApp into a live run, identically to what launch-mode
+        construction + `on_mount` do together for `autumn run <script>`."""
+        state = self._adopt_live_spec(spec)
         self._dashboard_screen = DashboardScreen(self.runs_root, live_state=state)
         self.switch_screen(self._dashboard_screen)
         self._start_live_run()
+
+    def _launch_spec_now(self, spec: LaunchSpec) -> None:
+        """Launches `spec` against the already-mounted DashboardScreen (via
+        `promote_to_live`, the same mechanism `action_resume` uses) rather than
+        replacing it -- used by `submit_command`'s immediate-launch path and by
+        `_advance_queue`, both of which always run with a DashboardScreen
+        already on screen (CommandBar only exists there)."""
+        state = self._adopt_live_spec(spec)
+        self._dashboard_screen.promote_to_live(state)
+        self._start_live_run()
+
+    def _run_is_live(self) -> bool:
+        return self.state is not None and self.state.status is RunStatus.RUNNING
+
+    def _refresh_queue_panel(self) -> None:
+        self._dashboard_screen.refresh_queue(self.pending_queue)
+
+    def submit_command(self, text: str) -> None:
+        """Handles one line submitted via CommandBar (`:` on DashboardScreen).
+
+        A `gepa <script> ...` command launches immediately if no run is live,
+        or is appended to `pending_queue` if one is. A non-`gepa` prompt shows
+        the same stub notice InputScreen shows when nothing is live, but is
+        also queued (rather than shown immediately) when a run is live, so it
+        auto-advances in the same submitted order once its turn comes up
+        instead of jumping the queue. Malformed `gepa ...` syntax is reported
+        immediately either way -- parsing happens at submit time, not launch
+        time, so a bad command never even makes it into the queue.
+        """
+        text = text.strip()
+        if not text:
+            return
+
+        try:
+            spec = parse_command_line(text)
+        except LaunchSpecError as exc:
+            self.notify(str(exc), severity="error")
+            return
+
+        item: LaunchSpec | str = spec if spec is not None else text
+
+        if self._run_is_live():
+            self.pending_queue.append(item)
+            self._refresh_queue_panel()
+            return
+
+        if spec is not None:
+            self._launch_spec_now(spec)
+        else:
+            self.notify("Prompt execution not implemented yet", severity="warning")
+
+    def _poll_queue_advance(self) -> None:
+        state = self.state
+        if state is None or state is not self._queue_watch_state:
+            return
+        if state.status is RunStatus.RUNNING:
+            return
+        # Stop watching this now-finished run so this fires exactly once per
+        # run, then work through the queue -- stub entries just show their
+        # notice and fall through to the next item, a gepa entry launches and
+        # returns (it re-points _queue_watch_state at the new run itself).
+        self._queue_watch_state = None
+        self._advance_queue()
+
+    def _advance_queue(self) -> None:
+        while self.pending_queue:
+            item = self.pending_queue.pop(0)
+            self._refresh_queue_panel()
+            if isinstance(item, str):
+                self.notify("Prompt execution not implemented yet", severity="warning")
+                continue
+            self._launch_spec_now(item)
+            return
+        self._refresh_queue_panel()
 
     def action_toggle_help(self) -> None:
         self.push_screen(HelpScreen())
@@ -198,5 +304,6 @@ class AutumnApp(App):
         callback = DashboardCallback(self, state)
         self.state = state
         self._dashboard_callback = callback
+        self._queue_watch_state = state
         runner.launch(callback, spec)
         screen.promote_to_live(state)

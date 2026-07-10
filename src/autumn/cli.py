@@ -27,10 +27,13 @@ Three modes:
 
 import argparse
 import json
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
 from autumn import paths, registry
+
+_GEPA_PREFIX = "gepa "
 
 
 class LaunchSpecError(ValueError):
@@ -122,6 +125,31 @@ def parse_gepa_command(tokens: list[str]) -> LaunchSpec:
     if not spec.script_path.exists():
         raise LaunchSpecError(f"script not found: {spec.script_path}")
     return spec
+
+
+def parse_command_line(text: str) -> LaunchSpec | None:
+    """Parses one submitted line of free text from either InputScreen or
+    CommandBar into a `LaunchSpec`, or `None` if it isn't a `gepa ...` command
+    at all (a stub/non-`gepa` prompt) -- the shared classification both
+    surfaces use so they can't drift apart on what counts as a launch command.
+
+    `text` is assumed already stripped and non-empty (both callers handle the
+    empty-Enter case themselves before reaching this point, since it means
+    different things to each: browse-mode navigation for InputScreen, a no-op
+    for CommandBar).
+
+    Raises `LaunchSpecError` on malformed `gepa ...` syntax -- unbalanced
+    quotes, unknown flags, a missing/nonexistent script path -- exactly as
+    `parse_gepa_command` does, so callers only need one except clause.
+    """
+    if not text.startswith(_GEPA_PREFIX):
+        return None
+    remainder = text[len(_GEPA_PREFIX) :]
+    try:
+        tokens = shlex.split(remainder)
+    except ValueError as exc:  # unbalanced quotes, e.g. `gepa "foo`
+        raise LaunchSpecError(f"Couldn't parse command: {exc}") from exc
+    return parse_gepa_command(tokens)
 
 
 def _build_parser() -> argparse.ArgumentParser:
