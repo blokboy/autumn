@@ -48,7 +48,7 @@ async def test_landing_copy_invites_autumn_questions(tmp_path):
         command_input = app.screen.query_one("#command-input", Input)
 
         assert str(hint.content) == "A configurable CLI for LLMs"
-        assert command_input.placeholder == "Ask Autumn Anything..."
+        assert command_input.placeholder == "Ask Autumn anything..."
 
 
 async def test_empty_enter_transitions_to_browse_dashboard(tmp_path):

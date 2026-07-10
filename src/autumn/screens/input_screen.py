@@ -122,7 +122,7 @@ class InputScreen(Screen):
             yield Label("\n".join(_LOGO_LINES), classes="app-title")
             yield DeerSprite()
             yield Label(_HINT_TEXT, classes="input-hint")
-            yield _CommandInput(placeholder="Ask Autumn Anything...", id="command-input")
+            yield _CommandInput(placeholder="Ask Autumn anything...", id="command-input")
             yield Label(_FOOTER_HINT, classes="app-footer-hint")
 
     def on_mount(self) -> None:
