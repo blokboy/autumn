@@ -31,7 +31,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from autumn import paths, registry
+from autumn import local_models, paths, registry
 
 _GEPA_PREFIX = "gepa "
 
@@ -174,6 +174,52 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the run list as a JSON array instead of a plain-text table.",
     )
 
+    models_parser = subparsers.add_parser(
+        "models",
+        help="Manage Autumn's local model catalog.",
+    )
+    model_subparsers = models_parser.add_subparsers(dest="models_command")
+
+    install_parser = model_subparsers.add_parser(
+        "install",
+        help="Install a local model file into Autumn's managed catalog.",
+    )
+    install_parser.add_argument("name", help="Name to give this model in Autumn.")
+    install_parser.add_argument("source", type=Path, help="Path to a local model file.")
+    install_parser.add_argument(
+        "--backend",
+        default="llama.cpp",
+        help="Runtime backend for this model (default: llama.cpp).",
+    )
+    install_parser.add_argument(
+        "--context-window",
+        type=int,
+        default=None,
+        help="Optional context window metadata for this model.",
+    )
+
+    list_parser = model_subparsers.add_parser(
+        "list",
+        help="List installed local models.",
+    )
+    list_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the model catalog as JSON instead of a plain-text table.",
+    )
+
+    default_parser = model_subparsers.add_parser(
+        "default",
+        help="Select the default local model.",
+    )
+    default_parser.add_argument("name", help="Installed model name to use by default.")
+
+    remove_parser = model_subparsers.add_parser(
+        "remove",
+        help="Remove an installed local model.",
+    )
+    remove_parser.add_argument("name", help="Installed model name to remove.")
+
     return parser
 
 
@@ -239,6 +285,67 @@ def _runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _models_as_rows(models: list[local_models.LocalModel]) -> list[dict]:
+    return [
+        {
+            "name": model.name,
+            "backend": model.backend,
+            "path": str(model.path),
+            "context_window": model.context_window,
+            "is_default": model.is_default,
+        }
+        for model in models
+    ]
+
+
+def _models(args: argparse.Namespace) -> int:
+    catalog_root = paths.models_root()
+    command = args.models_command
+
+    if command == "install":
+        installed = local_models.install_model(
+            catalog_root,
+            name=args.name,
+            source_path=args.source,
+            backend=args.backend,
+            context_window=args.context_window,
+        )
+        default_note = " (default)" if installed.is_default else ""
+        print(f"installed {installed.name}{default_note}: {installed.path}")
+        return 0
+
+    if command == "list":
+        models = local_models.list_models(catalog_root)
+        if args.json:
+            print(json.dumps(_models_as_rows(models), indent=2))
+            return 0
+        if not models:
+            print("no models installed")
+            return 0
+        print(f"{'NAME':<24} {'BACKEND':<12} {'DEFAULT':<8} PATH")
+        for model in models:
+            default = "default" if model.is_default else "-"
+            print(f"{model.name:<24} {model.backend:<12} {default:<8} {model.path}")
+        return 0
+
+    if command == "default":
+        try:
+            selected = local_models.set_default(catalog_root, args.name)
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+        print(f"default model: {selected.name}")
+        return 0
+
+    if command == "remove":
+        local_models.remove_model(catalog_root, args.name)
+        print(f"removed {args.name}")
+        return 0
+
+    print("models command required")
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -251,6 +358,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "runs":
         return _runs(args)
+
+    if args.command == "models":
+        return _models(args)
 
     parser.print_help()
     return 1

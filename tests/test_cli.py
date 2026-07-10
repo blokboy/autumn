@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from autumn import cli
+from autumn import local_models
 from autumn.cli import LaunchSpecError, parse_gepa_command
 
 
@@ -79,3 +80,74 @@ def test_run_subcommand_rejects_missing_script(tmp_path):
     parser = cli._build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--dry-run"])
+
+
+def test_models_install_adds_model_to_catalog(tmp_path, monkeypatch, capsys):
+    model_file = tmp_path / "tiny.gguf"
+    model_file.write_bytes(b"fake model")
+    catalog_root = tmp_path / "models"
+    monkeypatch.setattr(cli.paths, "models_root", lambda: catalog_root)
+
+    result = cli.main(
+        [
+            "models",
+            "install",
+            "tiny",
+            str(model_file),
+            "--backend",
+            "llama.cpp",
+            "--context-window",
+            "2048",
+        ]
+    )
+
+    assert result == 0
+    assert "installed tiny" in capsys.readouterr().out
+    assert local_models.get_default(catalog_root).name == "tiny"
+
+
+def test_models_list_prints_installed_models(tmp_path, monkeypatch, capsys):
+    model_file = tmp_path / "tiny.gguf"
+    model_file.write_bytes(b"fake model")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=model_file)
+    monkeypatch.setattr(cli.paths, "models_root", lambda: catalog_root)
+
+    result = cli.main(["models", "list"])
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "tiny" in output
+    assert "llama.cpp" in output
+    assert "default" in output
+
+
+def test_models_default_selects_installed_model(tmp_path, monkeypatch, capsys):
+    first = tmp_path / "first.gguf"
+    first.write_bytes(b"first")
+    second = tmp_path / "second.gguf"
+    second.write_bytes(b"second")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="first", source_path=first)
+    local_models.install_model(catalog_root, name="second", source_path=second)
+    monkeypatch.setattr(cli.paths, "models_root", lambda: catalog_root)
+
+    result = cli.main(["models", "default", "second"])
+
+    assert result == 0
+    assert "default model: second" in capsys.readouterr().out
+    assert local_models.get_default(catalog_root).name == "second"
+
+
+def test_models_remove_deletes_installed_model(tmp_path, monkeypatch, capsys):
+    model_file = tmp_path / "tiny.gguf"
+    model_file.write_bytes(b"fake model")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=model_file)
+    monkeypatch.setattr(cli.paths, "models_root", lambda: catalog_root)
+
+    result = cli.main(["models", "remove", "tiny"])
+
+    assert result == 0
+    assert "removed tiny" in capsys.readouterr().out
+    assert local_models.list_models(catalog_root) == []
