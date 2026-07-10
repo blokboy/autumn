@@ -6,10 +6,10 @@ from textual.widgets import RichLog
 from autumn.models import DashboardState, LogLine
 
 _LEVEL_COLORS = {
-    "info": "#6b6577",
-    "success": "#5ae87a",
-    "warn": "#f0c560",
-    "error": "#f87171",
+    "info": "#a9906f",
+    "success": "#8faa5a",
+    "warn": "#e0a94f",
+    "error": "#c1542e",
 }
 
 

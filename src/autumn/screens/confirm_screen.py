@@ -61,8 +61,8 @@ class ConfirmScreen(ModalScreen[bool]):
         height: auto;
         max-width: 70%;
         padding: 1 2;
-        border: round #a78bfa;
-        background: #0a0810;
+        border: round #d98e4a;
+        background: #241a12;
     }
     ConfirmScreen .confirm-message {
         margin-bottom: 1;

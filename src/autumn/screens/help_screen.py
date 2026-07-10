@@ -24,8 +24,8 @@ class HelpScreen(ModalScreen):
         max-width: 70%;
         max-height: 80%;
         padding: 1 2;
-        border: round #a78bfa;
-        background: #0a0810;
+        border: round #d98e4a;
+        background: #241a12;
     }
     HelpScreen .help-heading {
         text-style: bold;

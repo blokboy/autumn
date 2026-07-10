@@ -19,7 +19,7 @@ class CandidateDetailScreen(ModalScreen):
     CandidateDetailScreen > VerticalScroll {
         width: 90%;
         height: 90%;
-        border: round #a78bfa;
+        border: round #d98e4a;
         padding: 1 2;
     }
     CandidateDetailScreen Label.component-name {

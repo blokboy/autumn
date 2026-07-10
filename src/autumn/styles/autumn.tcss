@@ -1,7 +1,8 @@
 /* autumn.tcss
  * Textual CSS for the `autumn` GEPA dashboard.
- * Torlink-inspired dark violet aesthetic: near-black background, rounded
- * box-drawn panels with embedded titles, dimmed secondary text.
+ * Torlink-inspired layout (rounded box-drawn panels with embedded titles,
+ * dimmed secondary text), recolored into a warm fall palette: soft earth
+ * tones and ambers over a dark umber background.
  * Palette values here must stay in sync with autumn/palette.py.
  */
 
@@ -10,8 +11,8 @@
 /* ============================== */
 
 Screen {
-    background: #0a0810;
-    color: #6b6577;
+    background: #241a12;
+    color: #a9906f;
 }
 
 /* ============================== */
@@ -23,9 +24,9 @@ OverviewPane,
 CandidatesTable,
 LogView,
 TabbedContent {
-    border: round #6b6577;
+    border: round #a9906f;
     border-title-align: left;
-    border-title-color: #a78bfa;
+    border-title-color: #d98e4a;
 }
 
 #sidebar:focus,
@@ -38,7 +39,7 @@ LogView:focus,
 LogView:focus-within,
 TabbedContent:focus,
 TabbedContent:focus-within {
-    border: round #a78bfa;
+    border: round #d98e4a;
 }
 
 /* ============================== */
@@ -46,31 +47,31 @@ TabbedContent:focus-within {
 /* ============================== */
 
 RunListItem {
-    color: #8a8a8a;
+    color: #c2a880;
     text-opacity: 55%;
 }
 
 RunListItem.-highlighted,
 RunListItem:focus {
-    color: #a78bfa;
+    color: #d98e4a;
     text-opacity: 100%;
     text-style: bold;
 }
 
 RunListItem.status-running {
-    color: #f0c560;
+    color: #e0a94f;
 }
 
 RunListItem.status-completed {
-    color: #5ae87a;
+    color: #8faa5a;
 }
 
 RunListItem.status-failed {
-    color: #f87171;
+    color: #c1542e;
 }
 
 RunListItem.status-stopped {
-    color: #86d6a2;
+    color: #b5c98c;
 }
 
 /* ============================== */
@@ -78,20 +79,20 @@ RunListItem.status-stopped {
 /* ============================== */
 
 .key-hint {
-    color: #b9a7e6;
+    color: #f0c17a;
     text-style: bold;
 }
 
 .status-error {
-    color: #f87171;
+    color: #c1542e;
 }
 
 .status-warning {
-    color: #f0c560;
+    color: #e0a94f;
 }
 
 .status-success {
-    color: #5ae87a;
+    color: #8faa5a;
 }
 
 /* ============================== */
@@ -101,16 +102,16 @@ RunListItem.status-stopped {
 HelpScreen,
 ConfirmScreen,
 CandidateDetailScreen {
-    background: #0a0810 80%;
+    background: #241a12 80%;
     align: center middle;
 }
 
 HelpScreen > Vertical,
 ConfirmScreen > Vertical,
 CandidateDetailScreen > VerticalScroll {
-    border: round #a78bfa;
-    border-title-color: #a78bfa;
-    background: #0a0810;
+    border: round #d98e4a;
+    border-title-color: #d98e4a;
+    background: #241a12;
 }
 
 /* ============================== */
@@ -118,13 +119,13 @@ CandidateDetailScreen > VerticalScroll {
 /* ============================== */
 
 ProgressBar > .bar--bar {
-    color: #a78bfa;
+    color: #d98e4a;
 }
 
 ProgressBar > .bar--complete {
-    color: #a78bfa;
+    color: #d98e4a;
 }
 
 ProgressBar > .bar--indeterminate {
-    color: #a78bfa;
+    color: #d98e4a;
 }

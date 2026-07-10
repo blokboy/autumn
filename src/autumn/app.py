@@ -5,8 +5,9 @@ import threading
 from pathlib import Path
 
 from textual.app import App
+from textual.theme import Theme
 
-from autumn import paths, queue_store, runner
+from autumn import palette, paths, queue_store, runner
 from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
@@ -15,6 +16,25 @@ from autumn.screens.confirm_screen import ConfirmScreen
 from autumn.screens.dashboard_screen import DashboardScreen
 from autumn.screens.help_screen import HelpScreen
 from autumn.screens.input_screen import InputScreen
+
+# Retints Textual's own built-in widget chrome (Input focus border, Button,
+# scrollbars, DataTable cursor, etc.) to match styles/autumn.tcss's fall
+# palette -- without this, anything not explicitly styled in autumn.tcss
+# falls back to Textual's default blue accent, which clashes.
+_AUTUMN_THEME = Theme(
+    name="autumn",
+    primary=palette.ACCENT_PRIMARY,
+    secondary=palette.ACCENT_SECONDARY,
+    warning=palette.WARNING,
+    error=palette.ERROR,
+    success=palette.SUCCESS,
+    accent=palette.ACCENT_PRIMARY,
+    foreground=palette.CHROME,
+    background=palette.BACKGROUND,
+    surface=palette.BACKGROUND,
+    panel=palette.BACKGROUND,
+    dark=True,
+)
 
 _QUIT_WHILE_RUNNING_MESSAGE = (
     "Quitting will terminate the in-progress run immediately. "
@@ -38,7 +58,7 @@ _QUEUE_POLL_INTERVAL_SECONDS = 0.2
 
 
 class AutumnApp(App):
-    """Torlink-styled dashboard: either launches (and live-tracks) one GEPA
+    """Torlink-styled (fall-toned) dashboard: either launches (and live-tracks) one GEPA
     optimization run, or -- with no run_name/run_dir given -- just browses the
     run registry under runs_root with nothing pinned live."""
 
@@ -62,6 +82,8 @@ class AutumnApp(App):
         queue_sessions_root: Path | None = None,
     ) -> None:
         super().__init__()
+        self.register_theme(_AUTUMN_THEME)
+        self.theme = "autumn"
         self.runs_root = runs_root
         self.run_name = run_name
         self.run_dir = run_dir

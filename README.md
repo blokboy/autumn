@@ -1,6 +1,6 @@
 # autumn
 
-`autumn` is a [Textual](https://textual.textualize.io/) terminal dashboard for watching [GEPA](https://github.com/gepa-ai/gepa) prompt-optimization runs live, styled after the terminal torrent client Torlink (dark violet, rounded box-drawn panels with embedded titles).
+`autumn` is a [Textual](https://textual.textualize.io/) terminal dashboard for watching [GEPA](https://github.com/gepa-ai/gepa) prompt-optimization runs live, styled after the terminal torrent client Torlink (rounded box-drawn panels with embedded titles), recolored with a warm fall palette of soft earth tones and ambers.
 
 ## Install
 

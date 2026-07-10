@@ -34,13 +34,13 @@ class CommandBar(Vertical):
     CommandBar {
         dock: bottom;
         height: auto;
-        border-top: round #6b6577;
+        border-top: round #a9906f;
     }
     CommandBar:focus-within {
-        border-top: round #a78bfa;
+        border-top: round #d98e4a;
     }
     CommandBar #queue-preview {
-        color: #8a8a8a;
+        color: #c2a880;
         text-opacity: 55%;
         padding: 0 1;
         display: none;

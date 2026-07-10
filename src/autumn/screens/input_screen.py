@@ -32,30 +32,41 @@ class InputScreen(Screen):
     InputScreen {
         align: center middle;
     }
-    InputScreen Vertical {
+    InputScreen #input-screen-frame {
         width: 80%;
         max-width: 100;
         height: auto;
-        border: round #a78bfa;
+    }
+    InputScreen .app-title {
+        width: 100%;
+        content-align: center middle;
+        text-style: bold;
+        color: #d98e4a;
+        margin-bottom: 1;
+    }
+    InputScreen #command-box {
+        height: auto;
+        border: round #d98e4a;
         padding: 1 2;
     }
     InputScreen .input-hint {
-        color: #6b6577;
+        color: #a9906f;
         margin-bottom: 1;
     }
     """
 
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label(
-                "Enter to browse runs, or `gepa <script.py> [--dry-run] [--name ...] "
-                "[--run-dir ...]` to launch one.",
-                classes="input-hint",
-            )
-            yield Input(placeholder="gepa my_script.py --dry-run", id="command-input")
+        with Vertical(id="input-screen-frame"):
+            yield Label("autumn", classes="app-title")
+            with Vertical(id="command-box"):
+                yield Label(
+                    "Enter to browse runs, or `gepa <script.py> [--dry-run] [--name ...] "
+                    "[--run-dir ...]` to launch one.",
+                    classes="input-hint",
+                )
+                yield Input(placeholder="gepa my_script.py --dry-run", id="command-input")
 
     def on_mount(self) -> None:
-        self.query_one(Vertical).border_title = "autumn"
         self.query_one(Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:

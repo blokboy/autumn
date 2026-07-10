@@ -8,8 +8,8 @@ from textual.widgets import DataTable
 from autumn.models import CandidateRow, DashboardState
 from autumn.screens.candidate_detail_screen import CandidateDetailScreen
 
-_PARETO_COLOR = "#a78bfa"
-_REJECTED_COLOR = "#8a8a8a"
+_PARETO_COLOR = "#d98e4a"
+_REJECTED_COLOR = "#c2a880"
 _PARETO_MARKER = "●"  # filled circle, marks a Pareto-front member
 
 
