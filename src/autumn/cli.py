@@ -190,6 +190,7 @@ def _run(args: argparse.Namespace) -> int:
         run_dir=spec.run_dir,
         script_path=spec.script_path,
         dry_run=spec.dry_run,
+        queue_sessions_root=paths.sessions_root(),
     )
     app.run()
     return 0
@@ -198,7 +199,7 @@ def _run(args: argparse.Namespace) -> int:
 def _browse(args: argparse.Namespace) -> int:
     from autumn.app import AutumnApp
 
-    app = AutumnApp(runs_root=paths.default_runs_root())
+    app = AutumnApp(runs_root=paths.default_runs_root(), queue_sessions_root=paths.sessions_root())
     app.run()
     return 0
 

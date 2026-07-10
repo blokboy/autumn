@@ -40,29 +40,15 @@ hand-crafted fixtures in tests):
 """
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from autumn.models import CandidateRow, DashboardState, RunStatus, RunSummary
+from autumn.procutil import pid_alive
 
 _SCORE_KEYS = ("val_score", "valset_score", "average_score", "best_score", "score")
 _TERMINAL_EVENTS = {"on_optimization_end", "optimization_end"}
-
-
-def _pid_alive(pid: int) -> bool:
-    """True if `pid` refers to a live process this user can see (or owns)."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Process exists but is owned by someone else -- still alive.
-        return True
-    except OSError:
-        return False
-    return True
 
 
 def _read_json(path: Path) -> Any:
@@ -155,7 +141,7 @@ def infer_status(run_dir: Path) -> RunStatus:
     a terminal event -> COMPLETED, the old best-effort fallback.
     """
     pid = _read_pid(run_dir)
-    if pid is not None and _pid_alive(pid):
+    if pid is not None and pid_alive(pid):
         return RunStatus.RUNNING
 
     if (run_dir / "gepa.stop").exists():

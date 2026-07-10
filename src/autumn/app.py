@@ -1,11 +1,12 @@
 """The `autumn` Textual application."""
 
+import os
 import threading
 from pathlib import Path
 
 from textual.app import App
 
-from autumn import runner
+from autumn import paths, queue_store, runner
 from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
@@ -19,6 +20,13 @@ _QUIT_WHILE_RUNNING_MESSAGE = (
     "Quitting will terminate the in-progress run immediately. "
     "Press Q instead to stop cleanly."
 )
+
+
+def _resume_prompt_message(item_count: int, session_count: int) -> str:
+    items = "item" if item_count == 1 else "items"
+    sessions = "session" if session_count == 1 else "sessions"
+    return f"Found {item_count} pending {items} from {session_count} previous {sessions}."
+
 
 # How often to check whether this process's own live run has left RUNNING, so
 # the next queued command bar item (if any) can auto-start. Coarser than a
@@ -51,6 +59,7 @@ class AutumnApp(App):
         run_dir: Path | None = None,
         script_path: Path | None = None,
         dry_run: bool = False,
+        queue_sessions_root: Path | None = None,
     ) -> None:
         super().__init__()
         self.runs_root = runs_root
@@ -58,6 +67,16 @@ class AutumnApp(App):
         self.run_dir = run_dir
         self.script_path = script_path
         self.dry_run = dry_run
+
+        # This process's own on-disk pending-queue session file (see
+        # queue_store.py) -- one file per AutumnApp instance, so concurrent
+        # `autumn` processes never write the same file. Persisted on every
+        # queue mutation (see submit_command/_advance_queue), not just at
+        # quit, so a crash or kill -9 never loses queued commands.
+        self._queue_sessions_root = queue_sessions_root or paths.sessions_root()
+        self._queue_session_path = queue_store.session_path(
+            self._queue_sessions_root, queue_store.new_session_id()
+        )
 
         # Launch mode iff both run_name and run_dir are given (cli.py's `run`
         # subcommand always supplies both together); otherwise this is
@@ -98,9 +117,52 @@ class AutumnApp(App):
             self.push_screen(self._dashboard_screen)
             self._start_live_run()
         else:
-            self.push_screen(InputScreen())
+            self._offer_resume_or_input_screen()
 
         self.set_interval(_QUEUE_POLL_INTERVAL_SECONDS, self._poll_queue_advance)
+
+    def _offer_resume_or_input_screen(self) -> None:
+        """Bare `autumn`'s landing decision (never reached by `autumn run
+        <script.py>`, which always takes the launch-mode branch above): if
+        other sessions left a non-empty queue behind (and are confirmed dead
+        via `queue_store.discover_resumable`'s pid check -- a still-live
+        session's file is never surfaced here), ask before InputScreen whether
+        to resume it. No leftover sessions -> InputScreen exactly as before."""
+        leftover = queue_store.discover_resumable(self._queue_sessions_root, self._queue_session_path)
+        if not leftover:
+            self.push_screen(InputScreen())
+            return
+
+        merged = queue_store.load_and_merge(leftover)
+        message = _resume_prompt_message(len(merged), len(leftover))
+
+        def on_result(confirmed: bool) -> None:
+            queue_store.delete_files(leftover)
+            if confirmed:
+                self.pending_queue = merged
+                self._persist_queue()
+                # Not enter_browse_mode()'s switch_screen: by the time this
+                # callback runs, ConfirmScreen has already popped itself back
+                # off, leaving the app's implicit base screen on top -- which
+                # (unlike InputScreen) was never itself pushed via
+                # push_screen, so it has no result-callback slot for
+                # switch_screen to pop. push_screen (as the on_mount
+                # launch-mode branch above also does from this same base
+                # screen) is the correct call here.
+                self._dashboard_screen = DashboardScreen(self.runs_root)
+                self.push_screen(self._dashboard_screen)
+                # DashboardScreen mounts asynchronously -- _advance_queue's
+                # _refresh_queue_panel needs its CommandBar already mounted
+                # (via promote_to_live/query_one), so this must wait for that
+                # mount to actually land rather than running inline.
+                self.call_after_refresh(self._advance_queue)
+            else:
+                self.push_screen(InputScreen())
+
+        self.push_screen(
+            ConfirmScreen(message, title="Resume?", confirm_label="Resume", cancel_label="Start fresh"),
+            on_result,
+        )
 
     def _start_live_run(self) -> None:
         """Kicks off this process's live run on a background thread (dry-run
@@ -175,6 +237,13 @@ class AutumnApp(App):
     def _refresh_queue_panel(self) -> None:
         self._dashboard_screen.refresh_queue(self.pending_queue)
 
+    def _persist_queue(self) -> None:
+        """Rewrites this process's own queue session file to match
+        `pending_queue` exactly (deleting it once the queue is empty) --
+        called after every append and every pop so an on-disk copy is always
+        current, not just at quit (see queue_store.py)."""
+        queue_store.persist_queue(self._queue_session_path, self.pending_queue, pid=os.getpid())
+
     def submit_command(self, text: str) -> None:
         """Handles one line submitted via CommandBar (`:` on DashboardScreen).
 
@@ -201,6 +270,7 @@ class AutumnApp(App):
 
         if self._run_is_live():
             self.pending_queue.append(item)
+            self._persist_queue()
             self._refresh_queue_panel()
             return
 
@@ -225,6 +295,7 @@ class AutumnApp(App):
     def _advance_queue(self) -> None:
         while self.pending_queue:
             item = self.pending_queue.pop(0)
+            self._persist_queue()
             self._refresh_queue_panel()
             if isinstance(item, str):
                 self.notify("Prompt execution not implemented yet", severity="warning")

@@ -5,14 +5,27 @@ from datetime import datetime
 from pathlib import Path
 
 
-def default_runs_root() -> Path:
-    """XDG-style: $XDG_DATA_HOME/autumn/runs, falling back to ~/.local/share/autumn/runs."""
+def _data_root() -> Path:
+    """XDG-style: $XDG_DATA_HOME/autumn, falling back to ~/.local/share/autumn."""
     xdg_data_home = os.environ.get("XDG_DATA_HOME")
     if xdg_data_home:
         base = Path(xdg_data_home)
     else:
         base = Path.home() / ".local" / "share"
-    return base / "autumn" / "runs"
+    return base / "autumn"
+
+
+def default_runs_root() -> Path:
+    """XDG-style: $XDG_DATA_HOME/autumn/runs, falling back to ~/.local/share/autumn/runs."""
+    return _data_root() / "runs"
+
+
+def sessions_root() -> Path:
+    """XDG-style: $XDG_DATA_HOME/autumn/sessions, falling back to
+    ~/.local/share/autumn/sessions -- where each AutumnApp instance persists its
+    own pending-queue session file (see queue_store.py), scoped per-process so
+    concurrent `autumn` instances never write the same file."""
+    return _data_root() / "sessions"
 
 
 def derive_run_name(script_path: Path) -> str:
