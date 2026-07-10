@@ -82,7 +82,7 @@ class InputScreen(Screen):
             return
 
         if spec is None:
-            self.notify("Prompt execution not implemented yet", severity="warning")
+            self.app.open_chat_prompt(text)
             return
 
         self.app.launch_gepa_run(spec)

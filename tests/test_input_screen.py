@@ -9,7 +9,7 @@ import asyncio
 from textual.widgets import Input
 
 from autumn.app import AutumnApp
-from autumn.models import RunStatus
+from autumn.models import ChatMessage, RunStatus
 from autumn.screens.dashboard_screen import DashboardScreen
 from autumn.screens.input_screen import InputScreen
 
@@ -116,15 +116,12 @@ async def test_gepa_command_bad_flag_shows_error_and_stays(tmp_path):
         assert notifications[0].severity == "error"
 
 
-async def test_non_gepa_prompt_shows_stub_notice_and_stays(tmp_path):
+async def test_non_gepa_prompt_opens_dashboard_chat(tmp_path):
     app = AutumnApp(runs_root=tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
         await _submit(pilot, "summarize my last run")
 
-        assert isinstance(app.screen, InputScreen)
+        assert isinstance(app.screen, DashboardScreen)
         assert app.state is None
-        notifications = list(app._notifications)
-        assert len(notifications) == 1
-        assert notifications[0].severity == "warning"
-        assert "not implemented" in notifications[0].message
+        assert app.chat_messages[0] == ChatMessage(role="user", text="summarize my last run")

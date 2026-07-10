@@ -18,7 +18,7 @@ import asyncio
 from textual.widgets import Input
 
 from autumn.app import AutumnApp
-from autumn.models import RunStatus
+from autumn.models import ChatMessage, RunStatus
 from autumn.screens.dashboard_screen import DashboardScreen
 from autumn.screens.help_screen import HelpScreen
 from autumn.widgets.command_bar import CommandBar
@@ -157,7 +157,7 @@ async def test_queue_auto_advances_when_live_run_finishes(tmp_path):
         await asyncio.sleep(1.1)  # let "second" finish cleanly before teardown
 
 
-async def test_stub_prompt_queued_while_live_auto_advances_with_notice(tmp_path):
+async def test_prompt_queued_while_live_auto_advances_to_chat_reply(tmp_path):
     quick_script = tmp_path / "quick.py"
     _write_sleepy_script(quick_script, 0.8)
 
@@ -179,10 +179,14 @@ async def test_stub_prompt_queued_while_live_auto_advances_with_notice(tmp_path)
         await pilot.pause()
 
         assert app.pending_queue == []
-        notifications = list(app._notifications)
-        assert any(
-            n.severity == "warning" and "not implemented" in n.message for n in notifications
-        )
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="summarize my last run"),
+            ChatMessage(
+                role="assistant",
+                text="Offline local response: summarize my last run",
+                model="autumn/offline-tiny",
+            ),
+        ]
         # No new run was launched by the stub entry -- the queue just emptied.
         assert app.state.run_name == "first"
 

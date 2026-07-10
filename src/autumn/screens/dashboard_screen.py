@@ -17,6 +17,8 @@ from textual.widgets import ListView, TabbedContent, TabPane
 
 from autumn import registry
 from autumn.models import DashboardState, RunStatus
+from autumn.models import ChatMessage
+from autumn.widgets.chat_view import ChatView
 from autumn.widgets.candidates_table import CandidatesTable
 from autumn.widgets.command_bar import CommandBar
 from autumn.widgets.log_view import LogView
@@ -66,6 +68,7 @@ class DashboardScreen(Screen):
         self,
         runs_root: Path,
         live_state: DashboardState | None = None,
+        chat_messages: list[ChatMessage] | None = None,
         *args,
         **kwargs,
     ) -> None:
@@ -74,6 +77,7 @@ class DashboardScreen(Screen):
         self._live_state = live_state
         self._live_run_dir = live_state.run_dir if live_state is not None else None
         self._summaries = registry.merge_live(registry.scan(self._runs_root), live_state)
+        self._chat_messages = chat_messages or []
         self._last_seen_live_version = live_state.version if live_state is not None else -1
 
         initial = self._summaries[0] if self._summaries else None
@@ -94,6 +98,7 @@ class DashboardScreen(Screen):
                 yield TabPane("Overview", OverviewPane(self._displayed_state, id="overview"))
                 yield TabPane("Candidates", CandidatesTable(self._displayed_state, id="candidates"))
                 yield TabPane("Log", LogView(self._displayed_state, id="log"))
+                yield TabPane("Chat", ChatView(self._chat_messages, id="chat"))
         yield CommandBar(id="command-bar")
 
     def on_mount(self) -> None:
@@ -107,6 +112,10 @@ class DashboardScreen(Screen):
         """Called by AutumnApp whenever `pending_queue` changes, so the bar's
         preview line always mirrors the app's actual queue state."""
         self.query_one(CommandBar).refresh_queue(items)
+
+    def refresh_chat(self, messages: list[ChatMessage]) -> None:
+        self._chat_messages = messages
+        self.query_one("#chat", ChatView).refresh_from_messages(messages)
 
     def on_list_view_highlighted(self, message: ListView.Highlighted) -> None:
         item = message.item

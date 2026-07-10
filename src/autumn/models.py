@@ -41,6 +41,36 @@ class LogLine:
 
 
 @dataclass
+class ChatMessage:
+    """One message in a dashboard-scoped chat transcript."""
+
+    role: Literal["user", "assistant"]
+    text: str
+    model: str | None = None
+
+
+@dataclass
+class LocalModel:
+    """A model installed into Autumn's managed local catalog."""
+
+    name: str
+    backend: str
+    path: Path
+    context_window: int | None = None
+    is_default: bool = False
+
+
+@dataclass
+class ModelChoice:
+    """The model selected to answer a dashboard prompt."""
+
+    name: str
+    backend: str
+    path: Path | None
+    reason: str
+
+
+@dataclass
 class DashboardState:
     """Mutable in-memory snapshot of a run, watched by Textual widgets."""
 

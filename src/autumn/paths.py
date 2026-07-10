@@ -28,6 +28,16 @@ def sessions_root() -> Path:
     return _data_root() / "sessions"
 
 
+def chat_sessions_root() -> Path:
+    """XDG-style location for dashboard chat transcript session files."""
+    return _data_root() / "chat-sessions"
+
+
+def models_root() -> Path:
+    """XDG-style location for Autumn-managed local model files."""
+    return _data_root() / "models"
+
+
 def derive_run_name(script_path: Path) -> str:
     """<script-stem>-<timestamp>, e.g. 'my_script-20260709T143200'. Timestamp format: %Y%m%dT%H%M%S (filesystem-safe, no colons)."""
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")

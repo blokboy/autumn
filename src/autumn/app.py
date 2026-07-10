@@ -7,11 +7,11 @@ from pathlib import Path
 from textual.app import App
 from textual.theme import Theme
 
-from autumn import palette, paths, queue_store, runner
+from autumn import chat_store, local_llm, model_router, palette, paths, queue_store, runner
 from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
-from autumn.models import DashboardState, LiveRunSpec, RunStatus
+from autumn.models import ChatMessage, DashboardState, LiveRunSpec, RunStatus
 from autumn.screens.confirm_screen import ConfirmScreen
 from autumn.screens.dashboard_screen import DashboardScreen
 from autumn.screens.help_screen import HelpScreen
@@ -42,10 +42,24 @@ _QUIT_WHILE_RUNNING_MESSAGE = (
 )
 
 
-def _resume_prompt_message(item_count: int, session_count: int) -> str:
+def _resume_prompt_message(
+    item_count: int,
+    session_count: int,
+    chat_message_count: int = 0,
+    chat_session_count: int = 0,
+) -> str:
     items = "item" if item_count == 1 else "items"
     sessions = "session" if session_count == 1 else "sessions"
-    return f"Found {item_count} pending {items} from {session_count} previous {sessions}."
+    parts = []
+    if item_count:
+        parts.append(f"{item_count} pending {items} from {session_count} previous {sessions}")
+    if chat_message_count:
+        chat_messages = "chat message" if chat_message_count == 1 else "chat messages"
+        chat_sessions = "session" if chat_session_count == 1 else "sessions"
+        parts.append(
+            f"{chat_message_count} pending {chat_messages} from {chat_session_count} previous {chat_sessions}"
+        )
+    return "Found " + " and ".join(parts) + "."
 
 
 # How often to check whether this process's own live run has left RUNNING, so
@@ -80,6 +94,8 @@ class AutumnApp(App):
         script_path: Path | None = None,
         dry_run: bool = False,
         queue_sessions_root: Path | None = None,
+        chat_sessions_root: Path | None = None,
+        model_catalog_root: Path | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(_AUTUMN_THEME)
@@ -99,6 +115,12 @@ class AutumnApp(App):
         self._queue_session_path = queue_store.session_path(
             self._queue_sessions_root, queue_store.new_session_id()
         )
+        self._chat_sessions_root = chat_sessions_root or paths.chat_sessions_root()
+        self._chat_session_path = chat_store.session_path(
+            self._chat_sessions_root, chat_store.new_session_id()
+        )
+        self.chat_messages: list[ChatMessage] = []
+        self._model_catalog_root = model_catalog_root or paths.models_root()
 
         # Launch mode iff both run_name and run_dir are given (cli.py's `run`
         # subcommand always supplies both together); otherwise this is
@@ -135,7 +157,9 @@ class AutumnApp(App):
             # screen stack -- query_one/query only search the currently active
             # screen, which by the time `r` is pressed could be a ConfirmScreen
             # modal pushed on top of it.
-            self._dashboard_screen = DashboardScreen(self.runs_root, live_state=self.state)
+            self._dashboard_screen = DashboardScreen(
+                self.runs_root, live_state=self.state, chat_messages=self.chat_messages
+            )
             self.push_screen(self._dashboard_screen)
             self._start_live_run()
         else:
@@ -151,18 +175,30 @@ class AutumnApp(App):
         session's file is never surfaced here), ask before InputScreen whether
         to resume it. No leftover sessions -> InputScreen exactly as before."""
         leftover = queue_store.discover_resumable(self._queue_sessions_root, self._queue_session_path)
-        if not leftover:
+        leftover_chats = chat_store.discover_resumable(
+            self._chat_sessions_root, self._chat_session_path
+        )
+        if not leftover and not leftover_chats:
             self.push_screen(InputScreen())
             return
 
         merged = queue_store.load_and_merge(leftover)
-        message = _resume_prompt_message(len(merged), len(leftover))
+        merged_chat = chat_store.load_and_merge(leftover_chats)
+        message = _resume_prompt_message(
+            len(merged),
+            len(leftover),
+            len(merged_chat),
+            len(leftover_chats),
+        )
 
         def on_result(confirmed: bool) -> None:
             queue_store.delete_files(leftover)
+            chat_store.delete_files(leftover_chats)
             if confirmed:
                 self.pending_queue = merged
+                self.chat_messages = merged_chat
                 self._persist_queue()
+                self._persist_chat()
                 # Not enter_browse_mode()'s switch_screen: by the time this
                 # callback runs, ConfirmScreen has already popped itself back
                 # off, leaving the app's implicit base screen on top -- which
@@ -171,7 +207,9 @@ class AutumnApp(App):
                 # switch_screen to pop. push_screen (as the on_mount
                 # launch-mode branch above also does from this same base
                 # screen) is the correct call here.
-                self._dashboard_screen = DashboardScreen(self.runs_root)
+                self._dashboard_screen = DashboardScreen(
+                    self.runs_root, chat_messages=self.chat_messages
+                )
                 self.push_screen(self._dashboard_screen)
                 # DashboardScreen mounts asynchronously -- _advance_queue's
                 # _refresh_queue_panel needs its CommandBar already mounted
@@ -212,8 +250,42 @@ class AutumnApp(App):
         `_browse()`'s launch-mode-free `AutumnApp` construction produces (no
         live_state), swapped in for InputScreen with `switch_screen` rather
         than pushed on top of it -- there's nothing to go "back" to."""
-        self._dashboard_screen = DashboardScreen(self.runs_root)
+        self._dashboard_screen = DashboardScreen(self.runs_root, chat_messages=self.chat_messages)
         self.switch_screen(self._dashboard_screen)
+
+    def _persist_chat(self) -> None:
+        chat_store.persist_chat(self._chat_session_path, self.chat_messages, pid=os.getpid())
+
+    def _append_user_prompt(self, text: str) -> None:
+        self.chat_messages.append(ChatMessage(role="user", text=text))
+        self._persist_chat()
+        if hasattr(self, "_dashboard_screen"):
+            self._dashboard_screen.refresh_chat(self.chat_messages)
+
+    def _append_assistant_reply(self, message: ChatMessage) -> None:
+        self.chat_messages.append(message)
+        self._persist_chat()
+        if hasattr(self, "_dashboard_screen"):
+            self._dashboard_screen.refresh_chat(self.chat_messages)
+
+    def _answer_prompt_async(self) -> None:
+        snapshot = list(self.chat_messages)
+
+        def run() -> None:
+            choice = model_router.choose_model(
+                prompt=snapshot[-1].text if snapshot else "",
+                catalog_root=self._model_catalog_root,
+            )
+            message = local_llm.generate_response(snapshot, choice)
+            self.call_from_thread(self._append_assistant_reply, message)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def open_chat_prompt(self, text: str) -> None:
+        self._append_user_prompt(text)
+        self._dashboard_screen = DashboardScreen(self.runs_root, chat_messages=self.chat_messages)
+        self.switch_screen(self._dashboard_screen)
+        self.call_after_refresh(self._answer_prompt_async)
 
     def _adopt_live_spec(self, spec: LaunchSpec) -> DashboardState:
         """Updates run_name/run_dir/script_path/dry_run and constructs a fresh
@@ -239,7 +311,9 @@ class AutumnApp(App):
         browse-only AutumnApp into a live run, identically to what launch-mode
         construction + `on_mount` do together for `autumn run <script>`."""
         state = self._adopt_live_spec(spec)
-        self._dashboard_screen = DashboardScreen(self.runs_root, live_state=state)
+        self._dashboard_screen = DashboardScreen(
+            self.runs_root, live_state=state, chat_messages=self.chat_messages
+        )
         self.switch_screen(self._dashboard_screen)
         self._start_live_run()
 
@@ -291,6 +365,8 @@ class AutumnApp(App):
         item: LaunchSpec | str = spec if spec is not None else text
 
         if self._run_is_live():
+            if spec is None:
+                self._append_user_prompt(text)
             self.pending_queue.append(item)
             self._persist_queue()
             self._refresh_queue_panel()
@@ -299,7 +375,8 @@ class AutumnApp(App):
         if spec is not None:
             self._launch_spec_now(spec)
         else:
-            self.notify("Prompt execution not implemented yet", severity="warning")
+            self._append_user_prompt(text)
+            self._answer_prompt_async()
 
     def _poll_queue_advance(self) -> None:
         state = self.state
@@ -320,7 +397,7 @@ class AutumnApp(App):
             self._persist_queue()
             self._refresh_queue_panel()
             if isinstance(item, str):
-                self.notify("Prompt execution not implemented yet", severity="warning")
+                self._answer_prompt_async()
                 continue
             self._launch_spec_now(item)
             return

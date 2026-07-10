@@ -10,10 +10,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from autumn import queue_store
+from textual.widgets import Static
+
+from autumn import chat_store, queue_store
 from autumn.app import AutumnApp
 from autumn.cli import LaunchSpec
-from autumn.models import RunStatus
+from autumn.models import ChatMessage, RunStatus
 from autumn.screens.confirm_screen import ConfirmScreen
 from autumn.screens.dashboard_screen import DashboardScreen
 from autumn.screens.input_screen import InputScreen
@@ -134,6 +136,49 @@ async def test_resume_merges_leftover_sessions_and_auto_launches_first_item(tmp_
         assert not leftover_b.exists()
 
         await asyncio.sleep(0.5)  # let "resumed" finish cleanly before teardown
+
+
+async def test_resume_restores_leftover_chat_session(tmp_path):
+    chat_sessions_root = tmp_path / "chat-sessions"
+    leftover = chat_store.session_path(chat_sessions_root, "leftover")
+    chat_store.persist_chat(
+        leftover,
+        [
+            ChatMessage(role="user", text="what happened?"),
+            ChatMessage(
+                role="assistant",
+                text="Offline local response: what happened?",
+                model="autumn/offline-tiny",
+            ),
+        ],
+        pid=_dead_pid(),
+    )
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        queue_sessions_root=tmp_path / "queue-sessions",
+        chat_sessions_root=chat_sessions_root,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        assert "2 pending chat messages" in app.screen.message
+
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert isinstance(app.screen, DashboardScreen)
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="what happened?"),
+            ChatMessage(
+                role="assistant",
+                text="Offline local response: what happened?",
+                model="autumn/offline-tiny",
+            ),
+        ]
+        chat_text = app.screen.query_one("#chat-transcript", Static).content
+        assert "You: what happened?" in str(chat_text)
+        assert not leftover.exists()
 
 
 async def test_start_fresh_deletes_leftover_files_and_shows_input_screen(tmp_path):
