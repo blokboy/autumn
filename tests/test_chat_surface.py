@@ -309,7 +309,7 @@ async def test_prompt_with_provider_policy_falls_back_until_provider_execution_e
             ),
         ]
         status_text = app.screen.query_one("#chat-model-status", Static).content
-        assert "Fallback: autumn/offline-tiny (offline fallback)" in str(status_text)
+        assert "Fallback: autumn/offline-tiny (provider claude/sonnet not executable yet)" in str(status_text)
 
 
 async def test_live_run_queues_prompt_replies_in_order_without_duplicate_users(tmp_path):

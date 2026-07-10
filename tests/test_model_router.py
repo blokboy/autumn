@@ -167,7 +167,7 @@ def test_router_prefers_runnable_local_default_over_provider_candidate(tmp_path)
     assert choice.account_id is None
 
 
-def test_router_uses_offline_fallback_instead_of_provider_when_no_local_model_exists(tmp_path):
+def test_router_uses_eligible_provider_when_no_local_model_is_available(tmp_path):
     choice = model_router.choose_model(
         prompt="hello",
         catalog_root=tmp_path / "models",
@@ -192,12 +192,76 @@ def test_router_uses_offline_fallback_instead_of_provider_when_no_local_model_ex
         ),
     )
 
+    assert choice.name == "claude/sonnet"
+    assert choice.backend == "provider"
+    assert choice.path is None
+    assert choice.provider == "claude"
+    assert choice.account_id == "personal"
+    assert choice.reason == "provider available"
+
+
+def test_router_uses_offline_fallback_when_no_local_model_and_no_eligible_provider(tmp_path):
+    choice = model_router.choose_model(
+        prompt="hello",
+        catalog_root=tmp_path / "models",
+        policy=PromptRoutingPolicy(
+            provider_accounts=[
+                ProviderAccount(provider="claude", account_id="personal", is_signed_in=False)
+            ],
+            provider_models=[
+                ProviderModel(
+                    name="claude/sonnet",
+                    provider="claude",
+                    account_id="personal",
+                    is_enabled=True,
+                    priority=10,
+                )
+            ],
+        ),
+    )
+
     assert choice.name == "autumn/offline-tiny"
     assert choice.backend == "builtin"
     assert choice.path is None
     assert choice.provider is None
     assert choice.account_id is None
     assert choice.reason == "offline fallback"
+
+
+def test_router_prefers_explicit_provider_default_over_non_default_local_model(tmp_path):
+    model_path = tmp_path / "models" / "spare" / "spare.gguf"
+    choice = model_router.choose_model(
+        prompt="hello",
+        catalog_root=tmp_path / "models",
+        available_models=[
+            LocalModel(
+                name="spare",
+                backend="llama.cpp",
+                path=model_path,
+                context_window=4096,
+                is_default=False,
+            )
+        ],
+        is_runtime_available=lambda model: True,
+        policy=PromptRoutingPolicy(
+            provider_accounts=[
+                ProviderAccount(provider="claude", account_id="personal", is_signed_in=True)
+            ],
+            provider_models=[
+                ProviderModel(
+                    name="claude/sonnet",
+                    provider="claude",
+                    account_id="personal",
+                    priority=50,
+                    is_default=True,
+                )
+            ],
+        ),
+    )
+
+    assert choice.name == "claude/sonnet"
+    assert choice.backend == "provider"
+    assert choice.reason == "provider available"
 
 
 def test_router_preserves_default_unavailable_reason_when_all_local_models_are_unusable(tmp_path):

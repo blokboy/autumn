@@ -79,6 +79,7 @@ class ProviderModel:
     account_id: str
     is_enabled: bool = True
     priority: int = 100
+    is_default: bool = False
 
 
 @dataclass
@@ -87,6 +88,25 @@ class PromptRoutingPolicy:
 
     provider_accounts: list[ProviderAccount] = field(default_factory=list)
     provider_models: list[ProviderModel] = field(default_factory=list)
+
+
+@dataclass
+class CatalogEntry:
+    """A single selectable row in Autumn's unified model catalog -- local
+    models and any eligible provider-backed candidates from a
+    `PromptRoutingPolicy`, addressed by (group, name) so the Models tab and
+    `model_router.choose_model`'s fallback chain share one shape. `group` is
+    "Local" for installed local models, or a provider name (e.g. "groq") for
+    provider-backed entries."""
+
+    group: str
+    name: str
+    backend: str
+    path: Path | None = None
+    context_window: int | None = None
+    provider: str | None = None
+    account_id: str | None = None
+    is_default: bool = False
 
 
 @dataclass
