@@ -8,6 +8,15 @@
 pip install -e .
 ```
 
+## Release
+
+The PyPI distribution is published as `autumn-cli` (plain `autumn` was already taken by an unrelated package), but the installed console command is still `autumn`. Releases are cut by hand -- a maintainer with PyPI access bumps `version` in `pyproject.toml` and, from `gepa-tui/`, runs:
+
+```bash
+python -m build
+twine upload dist/*
+```
+
 ## Usage
 
 ```bash
