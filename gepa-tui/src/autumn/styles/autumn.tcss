@@ -1,0 +1,130 @@
+/* autumn.tcss
+ * Textual CSS for the `autumn` GEPA dashboard.
+ * Torlink-inspired dark violet aesthetic: near-black background, rounded
+ * box-drawn panels with embedded titles, dimmed secondary text.
+ * Palette values here must stay in sync with autumn/palette.py.
+ */
+
+/* ============================== */
+/* Layout & background            */
+/* ============================== */
+
+Screen {
+    background: #0a0810;
+    color: #6b6577;
+}
+
+/* ============================== */
+/* Panels & borders                */
+/* ============================== */
+
+#sidebar,
+OverviewPane,
+CandidatesTable,
+LogView,
+TabbedContent {
+    border: round #6b6577;
+    border-title-align: left;
+    border-title-color: #a78bfa;
+}
+
+#sidebar:focus,
+#sidebar:focus-within,
+OverviewPane:focus,
+OverviewPane:focus-within,
+CandidatesTable:focus,
+CandidatesTable:focus-within,
+LogView:focus,
+LogView:focus-within,
+TabbedContent:focus,
+TabbedContent:focus-within {
+    border: round #a78bfa;
+}
+
+/* ============================== */
+/* Sidebar & run status            */
+/* ============================== */
+
+RunListItem {
+    color: #8a8a8a;
+    text-opacity: 55%;
+}
+
+RunListItem.-highlighted,
+RunListItem:focus {
+    color: #a78bfa;
+    text-opacity: 100%;
+    text-style: bold;
+}
+
+RunListItem.status-running {
+    color: #f0c560;
+}
+
+RunListItem.status-completed {
+    color: #5ae87a;
+}
+
+RunListItem.status-failed {
+    color: #f87171;
+}
+
+RunListItem.status-stopped {
+    color: #86d6a2;
+}
+
+/* ============================== */
+/* Key hints & status utilities    */
+/* ============================== */
+
+.key-hint {
+    color: #b9a7e6;
+    text-style: bold;
+}
+
+.status-error {
+    color: #f87171;
+}
+
+.status-warning {
+    color: #f0c560;
+}
+
+.status-success {
+    color: #5ae87a;
+}
+
+/* ============================== */
+/* Modals                          */
+/* ============================== */
+
+HelpScreen,
+ConfirmScreen,
+CandidateDetailScreen {
+    background: #0a0810 80%;
+    align: center middle;
+}
+
+HelpScreen > Vertical,
+ConfirmScreen > Vertical,
+CandidateDetailScreen > VerticalScroll {
+    border: round #a78bfa;
+    border-title-color: #a78bfa;
+    background: #0a0810;
+}
+
+/* ============================== */
+/* Progress bar                    */
+/* ============================== */
+
+ProgressBar > .bar--bar {
+    color: #a78bfa;
+}
+
+ProgressBar > .bar--complete {
+    color: #a78bfa;
+}
+
+ProgressBar > .bar--indeterminate {
+    color: #a78bfa;
+}

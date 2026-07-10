@@ -1,0 +1,29 @@
+# autumn
+
+`autumn` is a [Textual](https://textual.textualize.io/) terminal dashboard for watching [GEPA](https://github.com/gepa-ai/gepa) prompt-optimization runs live, styled after the terminal torrent client Torlink (dark violet, rounded box-drawn panels with embedded titles).
+
+## Install
+
+```bash
+pip install -e .
+```
+
+## Usage
+
+```bash
+autumn
+```
+
+Bare `autumn` opens the dashboard in browse mode: it scans the runs directory (`$XDG_DATA_HOME/autumn/runs`, falling back to `~/.local/share/autumn/runs`) and lets you browse any past run's full Overview/Candidates/Log tabs, reading straight from GEPA's own on-disk JSON files. Move the sidebar cursor (arrows or `j`/`k`) to preview a different run.
+
+```bash
+autumn runs [--json]
+```
+
+Non-interactive counterpart to bare `autumn`: prints the same run list as a plain-text table (or a JSON array with `--json`) and exits, without opening the TUI.
+
+```bash
+autumn run <script.py> --dry-run
+```
+
+Launches the live dashboard. `--dry-run` replays a scripted, dependency-free sequence of optimization events against it (no real GEPA run required) so you can see the sidebar, status, iteration/budget progress, and best-candidate summary update live; the sidebar still shows the full run registry, with the live run pinned first. `<script.py>` is not executed in `--dry-run` mode -- it's only used to derive the run's display name. Running `autumn run <script.py>` without `--dry-run` to actually execute a real GEPA script is not yet implemented.
