@@ -22,3 +22,6 @@ autumn = "autumn.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/autumn"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

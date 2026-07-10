@@ -106,6 +106,37 @@ class DashboardScreen(Screen):
         self._displayed_state = self._state_for(run_dir)
         self._refresh_tabs(self._displayed_state)
 
+    @property
+    def selected_run_dir(self) -> Path | None:
+        """The run_dir currently highlighted in the sidebar (live or historical),
+        or None if the sidebar is empty. Used by AutumnApp's `r` (resume) action
+        to know which run to act on."""
+        return self._selected_run_dir
+
+    def selected_run_status(self) -> RunStatus | None:
+        """Status of the currently-selected run: the live in-memory status if
+        it's this process's own live run (always fresher than a disk scan),
+        otherwise inferred from disk. None if nothing is selected."""
+        if self._selected_run_dir is None:
+            return None
+        if self._selected_run_dir == self._live_run_dir and self._live_state is not None:
+            return self._live_state.status
+        return registry.infer_status(self._selected_run_dir)
+
+    def promote_to_live(self, state: DashboardState) -> None:
+        """Adopts `state` as this screen's live run, called by AutumnApp right
+        after it resumes a historical run via `r`. Pins the run first in the
+        sidebar (via the next registry rescan, reusing the same merge_live path
+        as any other live run) and immediately switches the displayed tabs to
+        follow it, since resuming is presumed to mean "and now watch it"."""
+        self._live_state = state
+        self._live_run_dir = state.run_dir
+        self._last_seen_live_version = -1
+        self._selected_run_dir = state.run_dir
+        self._displayed_state = state
+        self._refresh_tabs(state)
+        self.run_worker(self._rescan_registry())
+
     def _refresh_tabs(self, state: DashboardState) -> None:
         self.query_one("#overview", OverviewPane).refresh_from_state(state)
         self.query_one("#candidates", CandidatesTable).refresh_from_state(state)

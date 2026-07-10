@@ -284,6 +284,19 @@ class DashboardCallback:
 
         self._push(mutate)
 
+    def _stopped_or(self, default: RunStatus) -> RunStatus:
+        """`default` unless `<run_dir>/gepa.stop` exists, in which case STOPPED.
+
+        A graceful stop (the `Q` keybinding) touches `gepa.stop` and then just
+        waits for GEPA's own `FileStopper` to let the current iteration finish
+        naturally -- from GEPA's engine's point of view that's a normal exit,
+        indistinguishable from completing on its own. Checking for the stop
+        file at completion time is what tells STOPPED apart from COMPLETED
+        (mirrors `registry.infer_status`'s same check for historical runs)."""
+        if (self._state.run_dir / "gepa.stop").exists():
+            return RunStatus.STOPPED
+        return default
+
     def on_optimization_end(self, event: dict) -> None:
         best_candidate_idx = event.get("best_candidate_idx")
         total_iterations = event.get("total_iterations")
@@ -293,8 +306,11 @@ class DashboardCallback:
             self._state.best_idx = best_candidate_idx
             self._state.total_iterations = total_iterations
             if self._state.status is RunStatus.RUNNING:
-                self._state.status = RunStatus.COMPLETED
-            self._state.append_log("success", "optimization finished")
+                self._state.status = self._stopped_or(RunStatus.COMPLETED)
+            self._state.append_log(
+                "success" if self._state.status is RunStatus.COMPLETED else "warn",
+                "optimization finished" if self._state.status is RunStatus.COMPLETED else "optimization stopped",
+            )
 
         self._push(mutate)
 
@@ -325,8 +341,11 @@ class DashboardCallback:
             self._flush_pending()
             if exc is None:
                 if self._state.status is RunStatus.RUNNING:
-                    self._state.status = RunStatus.COMPLETED
-                    self._state.append_log("success", "script finished")
+                    self._state.status = self._stopped_or(RunStatus.COMPLETED)
+                    if self._state.status is RunStatus.STOPPED:
+                        self._state.append_log("warn", "script finished (graceful stop)")
+                    else:
+                        self._state.append_log("success", "script finished")
                 else:
                     # GEPA's own on_optimization_end already set a terminal status
                     # (e.g. COMPLETED) -- don't clobber it, just note the exit.
