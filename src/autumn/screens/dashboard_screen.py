@@ -15,8 +15,8 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import ListView, TabbedContent, TabPane
 
-from autumn import local_models, registry
-from autumn.models import DashboardState, RunStatus
+from autumn import catalog, registry
+from autumn.models import CatalogEntry, DashboardState, PromptRoutingPolicy, RunStatus
 from autumn.models import ChatMessage
 from autumn.widgets.chat_view import ChatView
 from autumn.widgets.candidates_table import CandidatesTable
@@ -73,12 +73,14 @@ class DashboardScreen(Screen):
         chat_messages: list[ChatMessage] | None = None,
         chat_model_status: str | None = None,
         model_catalog_root: Path | None = None,
+        prompt_routing_policy: PromptRoutingPolicy | None = None,
         *args,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._runs_root = Path(runs_root)
         self._model_catalog_root = model_catalog_root
+        self._prompt_routing_policy = prompt_routing_policy
         self._live_state = live_state
         self._live_run_dir = live_state.run_dir if live_state is not None else None
         self._summaries = registry.merge_live(registry.scan(self._runs_root), live_state)
@@ -114,7 +116,7 @@ class DashboardScreen(Screen):
                 )
                 yield TabPane(
                     "Models",
-                    ModelCatalogView(self._models(), id="models"),
+                    ModelCatalogView(self._catalog_entries(), id="models"),
                     id="models-tab",
                 )
         yield CommandBar(id="command-bar")
@@ -128,19 +130,19 @@ class DashboardScreen(Screen):
 
     def action_set_default_model(self) -> None:
         view = self.query_one("#models", ModelCatalogView)
-        selected = view.selected_model_name
+        selected = view.selected_entry
         if selected is None:
             return
-        self.app.set_default_model(selected)
+        self.app.set_default_model(selected.group, selected.name)
         self.refresh_models()
 
-    def _models(self) -> list[local_models.LocalModel]:
+    def _catalog_entries(self) -> list[CatalogEntry]:
         if self._model_catalog_root is None:
             return []
-        return local_models.list_models(self._model_catalog_root)
+        return catalog.build_entries(self._model_catalog_root, policy=self._prompt_routing_policy)
 
     def refresh_models(self) -> None:
-        self.query_one("#models", ModelCatalogView).refresh_from_models(self._models())
+        self.query_one("#models", ModelCatalogView).refresh_from_entries(self._catalog_entries())
 
     def refresh_queue(self, items: list) -> None:
         """Called by AutumnApp whenever `pending_queue` changes, so the bar's

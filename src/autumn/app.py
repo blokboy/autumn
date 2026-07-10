@@ -8,7 +8,7 @@ from typing import Callable
 from textual.app import App
 from textual.theme import Theme
 
-from autumn import chat_store, local_llm, local_models, model_router, palette, paths, queue_store, runner
+from autumn import catalog, chat_store, local_llm, model_router, palette, paths, queue_store, runner
 from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
@@ -199,6 +199,7 @@ class AutumnApp(App):
                 chat_messages=self.chat_messages,
                 chat_model_status=self._chat_model_status,
                 model_catalog_root=self._model_catalog_root,
+                prompt_routing_policy=self._prompt_routing_policy,
             )
             self.push_screen(self._dashboard_screen)
             self._start_live_run()
@@ -253,6 +254,7 @@ class AutumnApp(App):
                     chat_messages=self.chat_messages,
                     chat_model_status=self._chat_model_status,
                     model_catalog_root=self._model_catalog_root,
+                    prompt_routing_policy=self._prompt_routing_policy,
                 )
                 self.push_screen(self._dashboard_screen)
                 # DashboardScreen mounts asynchronously -- _advance_queue's
@@ -299,14 +301,15 @@ class AutumnApp(App):
             chat_messages=self.chat_messages,
             chat_model_status=self._chat_model_status,
             model_catalog_root=self._model_catalog_root,
+            prompt_routing_policy=self._prompt_routing_policy,
         )
         self.switch_screen(self._dashboard_screen)
 
     def _persist_chat(self) -> None:
         chat_store.persist_chat(self._chat_session_path, self.chat_messages, pid=os.getpid())
 
-    def set_default_model(self, name: str) -> None:
-        local_models.set_default(self._model_catalog_root, name)
+    def set_default_model(self, group: str, name: str) -> None:
+        catalog.set_default(self._model_catalog_root, group, name)
         self.notify(f"Default model set to {name}", severity="information")
 
     def _append_user_prompt(self, text: str) -> ChatMessage:
@@ -406,6 +409,7 @@ class AutumnApp(App):
             chat_messages=self.chat_messages,
             chat_model_status=self._chat_model_status,
             model_catalog_root=self._model_catalog_root,
+            prompt_routing_policy=self._prompt_routing_policy,
         )
         self.switch_screen(self._dashboard_screen)
         self.call_after_refresh(
@@ -444,6 +448,7 @@ class AutumnApp(App):
             chat_messages=self.chat_messages,
             chat_model_status=self._chat_model_status,
             model_catalog_root=self._model_catalog_root,
+            prompt_routing_policy=self._prompt_routing_policy,
         )
         self.switch_screen(self._dashboard_screen)
         self._start_live_run()
