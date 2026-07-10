@@ -6,12 +6,14 @@ from pathlib import Path
 from textual.app import App
 
 from autumn import runner
+from autumn.cli import LaunchSpec
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
 from autumn.models import DashboardState, LiveRunSpec, RunStatus
 from autumn.screens.confirm_screen import ConfirmScreen
 from autumn.screens.dashboard_screen import DashboardScreen
 from autumn.screens.help_screen import HelpScreen
+from autumn.screens.input_screen import InputScreen
 
 _QUIT_WHILE_RUNNING_MESSAGE = (
     "Quitting will terminate the in-progress run immediately. "
@@ -60,13 +62,31 @@ class AutumnApp(App):
             self._dashboard_callback = None
 
     def on_mount(self) -> None:
-        # Kept as a direct reference (rather than looked up later via
-        # query_one) because DashboardScreen sits at the *bottom* of the
-        # screen stack -- query_one/query only search the currently active
-        # screen, which by the time `r` is pressed could be a ConfirmScreen
-        # modal pushed on top of it.
-        self._dashboard_screen = DashboardScreen(self.runs_root, live_state=self.state)
-        self.push_screen(self._dashboard_screen)
+        # Launch mode (both run_name/run_dir given, cli.py's `run` subcommand)
+        # goes straight to the dashboard, unaffected by InputScreen below.
+        # Browse-only construction (cli.py's `_browse`, i.e. bare `autumn`)
+        # lands on InputScreen first instead of jumping straight into browse
+        # mode -- InputScreen itself decides whether to fall through to browse
+        # (empty Enter) or promote into a live run (`gepa ...`, see
+        # `launch_gepa_run` below).
+        if self.run_name is not None and self.run_dir is not None:
+            # Kept as a direct reference (rather than looked up later via
+            # query_one) because DashboardScreen sits at the *bottom* of the
+            # screen stack -- query_one/query only search the currently active
+            # screen, which by the time `r` is pressed could be a ConfirmScreen
+            # modal pushed on top of it.
+            self._dashboard_screen = DashboardScreen(self.runs_root, live_state=self.state)
+            self.push_screen(self._dashboard_screen)
+            self._start_live_run()
+        else:
+            self.push_screen(InputScreen())
+
+    def _start_live_run(self) -> None:
+        """Kicks off this process's live run on a background thread (dry-run
+        replay or a real `runner.launch`) against whatever `_dashboard_callback`
+        currently is. Shared by `on_mount`'s launch-mode construction and
+        `launch_gepa_run` (InputScreen's `gepa ...` path), so the two ways of
+        starting a live run can't drift apart."""
         if self._dashboard_callback is None:
             return
         if self.dry_run:
@@ -81,6 +101,31 @@ class AutumnApp(App):
                 script_path=self.script_path, run_dir=self.run_dir, run_name=self.run_name
             )
             runner.launch(self._dashboard_callback, spec)
+
+    def enter_browse_mode(self) -> None:
+        """InputScreen's empty-Enter path: the same bare-browse DashboardScreen
+        `_browse()`'s launch-mode-free `AutumnApp` construction produces (no
+        live_state), swapped in for InputScreen with `switch_screen` rather
+        than pushed on top of it -- there's nothing to go "back" to."""
+        self._dashboard_screen = DashboardScreen(self.runs_root)
+        self.switch_screen(self._dashboard_screen)
+
+    def launch_gepa_run(self, spec: LaunchSpec) -> None:
+        """InputScreen's `gepa <script> ...` path: promotes this already-mounted,
+        browse-only AutumnApp into a live run, identically to what launch-mode
+        construction + `on_mount` do together for `autumn run <script>`."""
+        self.run_name = spec.run_name
+        self.run_dir = spec.run_dir
+        self.script_path = spec.script_path
+        self.dry_run = spec.dry_run
+
+        state = DashboardState(run_name=spec.run_name, run_dir=spec.run_dir)
+        self.state = state
+        self._dashboard_callback = DashboardCallback(self, state)
+
+        self._dashboard_screen = DashboardScreen(self.runs_root, live_state=state)
+        self.switch_screen(self._dashboard_screen)
+        self._start_live_run()
 
     def action_toggle_help(self) -> None:
         self.push_screen(HelpScreen())

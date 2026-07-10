@@ -75,6 +75,8 @@ async def test_stop_run_noop_without_an_active_run(tmp_path):
     app = AutumnApp(runs_root=tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
+        await pilot.press("enter")  # bare construction lands on InputScreen; empty Enter -> browse
+        await pilot.pause()
         assert app.state is None
         depth_before = len(app.screen_stack)
 
@@ -108,6 +110,8 @@ async def test_quit_exits_immediately_with_no_active_run(tmp_path):
     app = AutumnApp(runs_root=tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
+        await pilot.press("enter")  # bare construction lands on InputScreen; empty Enter -> browse
+        await pilot.pause()
         await pilot.press("q")
         await pilot.pause()
         assert app._exit
@@ -134,6 +138,8 @@ async def test_resume_relaunches_a_selected_stopped_run(tmp_path):
 
     app = AutumnApp(runs_root=tmp_path)
     async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")  # bare construction lands on InputScreen; empty Enter -> browse
         await pilot.pause()
         assert app.state is None
         assert app._dashboard_screen.selected_run_dir == run_dir
