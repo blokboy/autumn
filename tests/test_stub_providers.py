@@ -43,3 +43,26 @@ def test_disabled_provider_entries_is_deterministic_and_side_effect_free(monkeyp
     second_call = stub_providers.disabled_provider_entries()
 
     assert first_call == second_call
+
+
+def test_disabled_provider_entries_excludes_a_provider_with_a_real_entry():
+    """#21: once a provider has a real, policy-driven catalog entry, its
+    stub rows must not also appear -- `exclude_providers` is how a caller
+    (see `screens/dashboard_screen.py::_catalog_entries`) drops just that
+    provider's rows while leaving the other provider's stub rows intact."""
+    entries = stub_providers.disabled_provider_entries(exclude_providers={"anthropic"})
+
+    groups = {entry.group for entry in entries}
+    assert groups == {"OpenAI"}
+
+
+def test_disabled_provider_entries_excludes_both_providers_when_both_have_real_entries():
+    entries = stub_providers.disabled_provider_entries(exclude_providers={"anthropic", "openai"})
+
+    assert entries == []
+
+
+def test_disabled_provider_entries_exclude_providers_is_a_noop_for_unrelated_names():
+    entries = stub_providers.disabled_provider_entries(exclude_providers={"groq"})
+
+    assert entries == stub_providers.disabled_provider_entries()
