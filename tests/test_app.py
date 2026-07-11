@@ -7,6 +7,7 @@ without a real TTY.
 
 import asyncio
 import json
+import threading
 from pathlib import Path
 
 from app import AutumnApp
@@ -115,6 +116,87 @@ async def test_quit_exits_immediately_with_no_active_run(tmp_path):
         await pilot.press("q")
         await pilot.pause()
         assert app._exit
+
+
+async def test_confirm_from_thread_blocks_background_thread_until_confirmed(tmp_path):
+    """`_confirm_from_thread` (used by GroqRunner's mutating system tools --
+    see docs/prd/chat-cli-parity-tools.md) bridges a confirmation request
+    from a background thread to the main Textual thread and blocks the
+    background thread until the modal resolves. Simulated here the same way
+    test_groq_streaming.py's `_ScriptedGroqRunner` interleaves a real
+    background thread with Pilot actions, rather than racing wall-clock
+    timing."""
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        result: dict[str, bool] = {}
+
+        def call_from_background() -> None:
+            result["confirmed"] = app._confirm_from_thread("Remove `thing`?", 0.0)
+
+        thread = threading.Thread(target=call_from_background, daemon=True)
+        thread.start()
+
+        await pilot.pause(0.05)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert "confirmed" not in result, "background thread must still be blocked"
+
+        await pilot.click("#confirm")
+        await pilot.pause()
+        thread.join(timeout=2)
+
+        assert result["confirmed"] is True
+
+
+async def test_confirm_from_thread_returns_false_on_cancel(tmp_path):
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        result: dict[str, bool] = {}
+
+        def call_from_background() -> None:
+            result["confirmed"] = app._confirm_from_thread("Remove `thing`?", 0.0)
+
+        thread = threading.Thread(target=call_from_background, daemon=True)
+        thread.start()
+
+        await pilot.pause(0.05)
+        await pilot.press("escape")
+        await pilot.pause()
+        thread.join(timeout=2)
+
+        assert result["confirmed"] is False
+
+
+async def test_confirm_from_thread_respects_initial_delay(tmp_path):
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        result: dict[str, bool] = {}
+
+        def call_from_background() -> None:
+            result["confirmed"] = app._confirm_from_thread("Remove `thing`?", 5.0)
+
+        thread = threading.Thread(target=call_from_background, daemon=True)
+        thread.start()
+
+        await pilot.pause(0.05)
+        assert app.screen.query_one("#confirm").disabled is True
+
+        await pilot.press("escape")
+        await pilot.pause()
+        thread.join(timeout=2)
+
+        assert result["confirmed"] is False
 
 
 async def test_resume_relaunches_a_selected_stopped_run(tmp_path):

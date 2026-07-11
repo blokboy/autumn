@@ -556,6 +556,38 @@ class AutumnApp(App):
             on_complete=on_complete,
         )
 
+    def _confirm_from_thread(self, message: str, initial_delay: float) -> bool:
+        """Bridges a mutating system tool's confirmation request (see
+        `system_tools.py`, `docs/prd/chat-cli-parity-tools.md`) from the
+        background thread `GroqRunner.generate_stream` runs on (via
+        `_run_groq_stream`) to the main Textual thread: pushes
+        `ConfirmScreen` there and blocks the calling (background) thread
+        until the user answers, then returns the result. Passed to
+        `GroqRunner` as its `confirm` callback.
+
+        Blocking a background thread on a `threading.Event` while the main
+        thread handles the modal is safe here specifically because this
+        method is never called from the main thread itself -- doing so
+        would deadlock, since `call_from_thread` requires a *different*
+        thread than the one running the Textual event loop.
+        """
+        result_event = threading.Event()
+        result: dict[str, bool] = {}
+
+        def _on_result(confirmed: bool) -> None:
+            result["confirmed"] = confirmed
+            result_event.set()
+
+        def _push() -> None:
+            self.push_screen(
+                ConfirmScreen(message, title="Confirm action", initial_delay=initial_delay),
+                _on_result,
+            )
+
+        self.call_from_thread(_push)
+        result_event.wait()
+        return result["confirmed"]
+
     def _run_groq_stream(
         self,
         *,
@@ -568,7 +600,9 @@ class AutumnApp(App):
         choice: streams the reply token-by-token into a placeholder
         `ChatMessage` already sitting in `self.chat_messages` via
         `_run_stream_reply`."""
-        groq_runner = self._groq_runner or GroqRunner()
+        groq_runner = self._groq_runner or GroqRunner(
+            catalog_root=self._model_catalog_root, confirm=self._confirm_from_thread
+        )
         self._run_stream_reply(
             choice=choice,
             insert_after=insert_after,

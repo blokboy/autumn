@@ -9,20 +9,42 @@ import groq
 
 import credentials
 import search_docs
+import system_tools
 from models import ChatMessage
 
 GROQ_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it")
 
+# A synchronous confirmation prompt: given a human-readable message and a
+# delay (seconds the confirm action should stay disabled -- 0 for none),
+# returns whether the user confirmed. Called from whatever thread
+# `generate_stream` runs on (see `app.py`'s `_run_groq_stream`, which runs on
+# a background thread) -- the real implementation bridges to the Textual
+# main thread and blocks until `ConfirmScreen` resolves; see
+# `AutumnApp._confirm_from_thread`. `None` (the default) means no
+# confirmation surface is wired up, in which case every mutating tool call
+# is treated as declined -- silently allowing a mutation with no way to ask
+# the user would be the wrong default.
+ConfirmFn = Callable[[str, float], bool]
+
 # Tools offered to Groq on every chat turn (see docs/prd/chat-search-tools.md,
-# "Tool-call round"). `search_docs` is always offered -- it's local, free, and
-# has no key/opt-in gate. This is the only tool this ticket wires up; later
-# tools (search_web, system tools) extend this list.
-_TOOLS: list[dict[str, Any]] = [search_docs.TOOL_SCHEMA]
+# "Tool-call round", and docs/prd/chat-cli-parity-tools.md for the mutating
+# ones). `search_docs` is always offered -- it's local, free, and has no
+# key/opt-in gate. The five system-control tools from `system_tools.py` are
+# always offered too, but each one is confirmation-gated (see
+# `_execute_tool_call`) rather than executing immediately like `search_docs`.
+_TOOLS: list[dict[str, Any]] = [search_docs.TOOL_SCHEMA, *[tool.schema for tool in system_tools.MUTATING_TOOLS]]
 
 # name -> callable executing that tool's arguments and returning the result
-# text to hand back to Groq as a tool-role message.
+# text to hand back to Groq as a tool-role message. Only for tools that need
+# no confirmation -- mutating tools are looked up via `_MUTATING_TOOLS_BY_NAME`
+# instead (see `_execute_tool_call`), since they need a confirmation step
+# `_TOOL_EXECUTORS` alone can't express.
 _TOOL_EXECUTORS: dict[str, Callable[[dict[str, Any], Path | None], str]] = {
     search_docs.TOOL_NAME: lambda arguments, docs_root: search_docs.run_tool(arguments, root=docs_root),
+}
+
+_MUTATING_TOOLS_BY_NAME: dict[str, system_tools.MutatingTool] = {
+    tool.name: tool for tool in system_tools.MUTATING_TOOLS
 }
 
 
@@ -65,13 +87,24 @@ class GroqRunner:
     as a single blocking response (`generate`) or token-by-token
     (`generate_stream`)."""
 
-    def __init__(self, *, client: GroqClient | None = None, docs_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        client: GroqClient | None = None,
+        docs_root: Path | None = None,
+        catalog_root: Path | None = None,
+        confirm: ConfirmFn | None = None,
+    ) -> None:
         self._client = (
             client if client is not None else groq.Groq(api_key=credentials.resolve_key("groq", "GROQ_API_KEY"))
         )
         # Override point for tests; `None` means `search_docs` resolves the
         # real repo root itself (see search_docs._repo_root).
         self._docs_root = docs_root
+        # Override point for tests; `None` means `system_tools.run_tool`
+        # resolves the real models root itself (see paths.models_root()).
+        self._catalog_root = catalog_root
+        self._confirm = confirm
 
     def generate(self, messages: list[ChatMessage], model_name: str) -> ChatMessage:
         payload = _to_payload(messages)
@@ -189,19 +222,53 @@ class GroqRunner:
             result_text = f"Error: could not parse arguments for {name}: {exc}"
             failure_notice = f"[{name} failed: invalid arguments]\n\n"
         else:
-            executor = _TOOL_EXECUTORS.get(name)
-            if executor is None:
-                result_text = f"Error: unknown tool {name!r}"
-                failure_notice = f"[{name} failed: unknown tool]\n\n"
+            mutating_tool = _MUTATING_TOOLS_BY_NAME.get(name)
+            if mutating_tool is not None:
+                result_text, failure_notice = self._execute_mutating_tool(mutating_tool, arguments)
             else:
-                try:
-                    result_text = executor(arguments, self._docs_root)
-                except Exception as exc:
-                    result_text = f"Error: {name} failed: {exc}"
-                    failure_notice = f"[{name} failed: {exc}]\n\n"
+                executor = _TOOL_EXECUTORS.get(name)
+                if executor is None:
+                    result_text = f"Error: unknown tool {name!r}"
+                    failure_notice = f"[{name} failed: unknown tool]\n\n"
+                else:
+                    try:
+                        result_text = executor(arguments, self._docs_root)
+                    except Exception as exc:
+                        result_text = f"Error: {name} failed: {exc}"
+                        failure_notice = f"[{name} failed: {exc}]\n\n"
 
         tool_entry = {"role": "tool", "tool_call_id": tool_call.id, "content": result_text}
         return [assistant_entry, tool_entry], failure_notice
+
+    def _execute_mutating_tool(
+        self, tool: system_tools.MutatingTool, arguments: dict[str, Any]
+    ) -> tuple[str, str | None]:
+        """Confirms, then executes, a mutating system tool -- always
+        confirmation-gated (see docs/prd/chat-cli-parity-tools.md; there is
+        no autonomous-mode bypass yet, that's a later ticket). Returns
+        `(result_text, failure_notice)`, same shape `_execute_tool_call`
+        uses for `search_docs`.
+
+        A decline produces no `failure_notice` -- it isn't an error, it's
+        the user's choice, and the model's final answer is expected to
+        acknowledge it (via the tool-result content) rather than retry or
+        proceed as if it happened. An actual execution failure (invalid
+        target, `SystemToolError`, etc.) does produce a `failure_notice`,
+        same visible-degrade contract `search_docs` failures already use.
+
+        No confirmation surface wired up (`self._confirm is None`) is
+        treated the same as an explicit decline -- silently allowing a
+        mutation with no way to ask the user would be the wrong default.
+        """
+        message = tool.confirmation_message(arguments)
+        delay = 1.5 if tool.destructive else 0.0
+        confirmed = self._confirm(message, delay) if self._confirm is not None else False
+        if not confirmed:
+            return f"Declined by user: {tool.name} was not performed.", None
+        try:
+            return system_tools.run_tool(tool.name, arguments, catalog_root=self._catalog_root), None
+        except Exception as exc:
+            return f"Error: {tool.name} failed: {exc}", f"[{tool.name} failed: {exc}]\n\n"
 
     def _stream_completion(
         self,
