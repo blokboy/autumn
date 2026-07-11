@@ -8,7 +8,7 @@ Three modes:
   `runpy` on a background thread, streaming its real `GEPACallback` events
   into the dashboard live. `--dry-run` instead replays a scripted,
   dependency-free sequence of GEPA callback events
-  (`autumn.fixtures.dry_run_events.replay`) so the UI can be exercised without
+  (`fixtures.dry_run_events.replay`) so the UI can be exercised without
   a real GEPA optimization run -- `<script.py>` is still accepted and used to
   derive the run name in that mode, but is never imported or executed.
 - `autumn` (no subcommand) opens the dashboard on the InputScreen landing

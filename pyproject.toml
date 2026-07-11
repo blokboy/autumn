@@ -43,7 +43,7 @@ dev = ["pytest", "pytest-asyncio", "textual-dev"]
 autumn = "autumn.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/autumn"]
+packages = ["src/autumn", "src/fixtures"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

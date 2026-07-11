@@ -121,6 +121,7 @@ class DashboardScreen(Screen):
                         model_status=self._chat_model_status,
                         id="chat",
                     ),
+                    id="chat-tab",
                 )
                 yield TabPane(
                     "Models",

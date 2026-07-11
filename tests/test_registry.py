@@ -48,7 +48,7 @@ def _write_candidates_snapshot(
 
 
 # A real GEPA run_log.json entry (captured verbatim from an actual `gepa.optimize`
-# run against src/autumn/fixtures/demo_script.py) -- GEPA's own per-iteration trace
+# run against src/fixtures/demo_script.py) -- GEPA's own per-iteration trace
 # schema, with no "event"/"terminal" key of any kind, whether the run finished
 # cleanly or was killed mid-iteration. The old terminal-event heuristic alone
 # always reports FAILED for genuinely completed real runs; this is what

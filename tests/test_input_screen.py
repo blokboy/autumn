@@ -7,7 +7,7 @@ run_name/run_dir).
 
 import asyncio
 
-from textual.widgets import Input, Label
+from textual.widgets import Input, Label, TabbedContent
 
 from autumn.app import AutumnApp
 from autumn.models import ChatMessage, RunStatus
@@ -210,4 +210,5 @@ async def test_non_gepa_prompt_opens_dashboard_chat(tmp_path):
 
         assert isinstance(app.screen, DashboardScreen)
         assert app.state is None
+        assert app.screen.query_one(TabbedContent).active == "chat-tab"
         assert app.chat_messages[0] == ChatMessage(role="user", text="summarize my last run")

@@ -23,7 +23,7 @@ from autumn import (
 )
 from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
-from autumn.fixtures import dry_run_events
+from fixtures import dry_run_events
 from autumn.groq_runner import GroqRunner, GroqRuntimeError
 from autumn.local_model_runner import LocalModelRunner, LocalModelRuntimeError
 from autumn.models import (
@@ -674,6 +674,7 @@ class AutumnApp(App):
             chat_model_status=self._chat_model_status,
             model_catalog_root=self._model_catalog_root,
             prompt_routing_policy=self._prompt_routing_policy,
+            initial_tab="chat-tab",
         )
         self.switch_screen(self._dashboard_screen)
         self.call_after_refresh(
