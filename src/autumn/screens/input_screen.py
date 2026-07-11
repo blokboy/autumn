@@ -4,10 +4,11 @@ Three behaviors, all decided from one submitted line of text:
 
 - Empty Enter -> browse mode (`AutumnApp.enter_browse_mode`), same as bare
   `autumn` used to land on directly before this screen existed.
-- `gepa <script> [--dry-run] [--name ...] [--run-dir ...]` -> parsed via
+- `gepa <script> [--dry-run] [--name ...] [--run-dir ...]` or
+  `gepa --run-dir <directory>` -> parsed via
   `autumn.cli.parse_command_line` (shared with `DashboardScreen`'s CommandBar,
-  so the two surfaces can't drift) and handed to `AutumnApp.launch_gepa_run`
-  to launch identically to `autumn run <script>`.
+  so the two surfaces can't drift) and handed to AutumnApp to launch
+  identically to `autumn run`.
 - Anything else non-empty -> a shared Autumn chat prompt, shown on the
   dashboard and answered by the available local/fallback model path.
 
@@ -135,13 +136,13 @@ class InputScreen(Screen):
             return
 
         try:
-            spec = parse_command_line(text)
+            specs = parse_command_line(text)
         except LaunchSpecError as exc:
             self.notify(str(exc), severity="error")
             return
 
-        if spec is None:
+        if specs is None:
             self.app.open_chat_prompt(text)
             return
 
-        self.app.launch_gepa_run(spec)
+        self.app.launch_gepa_runs(specs)

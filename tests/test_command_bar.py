@@ -61,7 +61,7 @@ async def test_command_bar_copy_invites_chat_or_gepa(tmp_path):
 
         bar_input = app.screen.query_one(CommandBar).query_one(Input)
 
-        assert bar_input.placeholder == ": ask Autumn a question or gepa my_script.py --dry-run"
+        assert bar_input.placeholder == ": ask Autumn a question, gepa my_script.py, or gepa --run-dir examples/"
         assert "stub" not in bar_input.placeholder.lower()
 
 

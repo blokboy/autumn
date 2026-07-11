@@ -31,6 +31,10 @@ async def _submit(pilot, text: str) -> None:
     await pilot.pause()
 
 
+def _write_sleepy_script(path, seconds: float) -> None:
+    path.write_text(f"import time\ntime.sleep({seconds})\n")
+
+
 async def test_bare_autumn_opens_input_screen_first(tmp_path):
     app = AutumnApp(runs_root=tmp_path)
     async with app.run_test() as pilot:
@@ -84,6 +88,30 @@ async def test_gepa_command_launches_live_run(tmp_path):
         assert not any(isinstance(s, InputScreen) for s in app.screen_stack)
 
         await _drain_dry_run_replay()
+
+
+async def test_gepa_directory_command_launches_first_script_and_queues_rest(tmp_path):
+    script_dir = tmp_path / "examples"
+    script_dir.mkdir()
+    first_script = script_dir / "a_first.py"
+    second_script = script_dir / "b_second.py"
+    _write_sleepy_script(first_script, 0.5)
+    _write_sleepy_script(second_script, 0.1)
+    (script_dir / "README.md").write_text("# ignored\n")
+
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _submit(pilot, f"gepa --run-dir {script_dir}")
+
+        assert isinstance(app.screen, DashboardScreen)
+        assert app.state is not None
+        assert app.script_path == first_script
+        assert app.state.status is RunStatus.RUNNING
+        assert len(app.pending_queue) == 1
+        assert app.pending_queue[0].script_path == second_script
+
+        await asyncio.sleep(0.7)
 
 
 async def test_gepa_command_missing_script_shows_error_and_stays(tmp_path):

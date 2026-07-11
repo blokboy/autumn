@@ -17,8 +17,10 @@ def test_parse_gepa_command_valid_minimal(tmp_path):
     script = tmp_path / "script.py"
     script.write_text("pass\n")
 
-    spec = parse_gepa_command([str(script)])
+    specs = parse_gepa_command([str(script)])
+    spec = specs[0]
 
+    assert len(specs) == 1
     assert spec.script_path == script
     assert spec.dry_run is False
     assert spec.run_name.startswith("script-")
@@ -30,10 +32,12 @@ def test_parse_gepa_command_valid_with_all_flags(tmp_path):
     script.write_text("pass\n")
     run_dir = tmp_path / "custom-run-dir"
 
-    spec = parse_gepa_command(
+    specs = parse_gepa_command(
         [str(script), "--dry-run", "--name", "my-run", "--run-dir", str(run_dir)]
     )
+    spec = specs[0]
 
+    assert len(specs) == 1
     assert spec.script_path == script
     assert spec.dry_run is True
     assert spec.run_name == "my-run"
@@ -43,6 +47,43 @@ def test_parse_gepa_command_valid_with_all_flags(tmp_path):
 def test_parse_gepa_command_missing_script_raises():
     with pytest.raises(LaunchSpecError):
         parse_gepa_command(["--dry-run"])
+
+
+def test_parse_gepa_command_directory_mode_discovers_only_python_files(tmp_path):
+    script_dir = tmp_path / "examples"
+    script_dir.mkdir()
+    first = script_dir / "a_first.py"
+    first.write_text("pass\n")
+    second = script_dir / "b_second.py"
+    second.write_text("pass\n")
+    (script_dir / "README.md").write_text("# docs\n")
+    (script_dir / "notes.txt").write_text("not a script\n")
+    (script_dir / "nested.py").mkdir()
+
+    specs = parse_gepa_command(["--run-dir", str(script_dir), "--dry-run"])
+
+    assert [spec.script_path for spec in specs] == [first, second]
+    assert [spec.run_name.split("-")[0] for spec in specs] == ["a_first", "b_second"]
+    assert all(spec.run_dir.parent == cli.paths.default_runs_root() for spec in specs)
+    assert all(spec.dry_run is True for spec in specs)
+
+
+def test_parse_gepa_command_directory_mode_rejects_name_override(tmp_path):
+    script_dir = tmp_path / "examples"
+    script_dir.mkdir()
+    (script_dir / "script.py").write_text("pass\n")
+
+    with pytest.raises(LaunchSpecError):
+        parse_gepa_command(["--run-dir", str(script_dir), "--name", "custom"])
+
+
+def test_parse_gepa_command_directory_mode_requires_python_scripts(tmp_path):
+    script_dir = tmp_path / "examples"
+    script_dir.mkdir()
+    (script_dir / "README.md").write_text("# docs\n")
+
+    with pytest.raises(LaunchSpecError):
+        parse_gepa_command(["--run-dir", str(script_dir)])
 
 
 def test_parse_gepa_command_unknown_flag_raises(tmp_path):
@@ -77,9 +118,9 @@ def test_run_subcommand_grammar_unchanged(tmp_path):
 
 
 def test_run_subcommand_rejects_missing_script(tmp_path):
-    parser = cli._build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["run", "--dry-run"])
+    result = cli.main(["run", "--dry-run"])
+
+    assert result == 2
 
 
 def test_models_install_adds_model_to_catalog(tmp_path, monkeypatch, capsys):

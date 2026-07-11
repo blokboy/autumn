@@ -60,6 +60,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     the two entry points can never drift apart."""
     parser.add_argument(
         "script",
+        nargs="?",
         type=Path,
         help="Path to the GEPA optimization script to run (see --dry-run to instead "
         "replay a scripted demo without executing it).",
@@ -74,7 +75,8 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help="Directory to store/read run state (defaults under the autumn data "
-        "root). Accepted now; not yet wired up for real runs.",
+        "root). If no script is supplied, discover and run direct child *.py "
+        "scripts from this directory.",
     )
     parser.add_argument(
         "--name",
@@ -106,11 +108,51 @@ def build_launch_spec(args: argparse.Namespace) -> LaunchSpec:
     return LaunchSpec(run_name=run_name, run_dir=run_dir, script_path=script_path, dry_run=args.dry_run)
 
 
-def parse_gepa_command(tokens: list[str]) -> LaunchSpec:
+def _discover_directory_specs(script_dir: Path, *, dry_run: bool) -> list[LaunchSpec]:
+    if not script_dir.exists():
+        raise LaunchSpecError(f"run directory not found: {script_dir}")
+    if not script_dir.is_dir():
+        raise LaunchSpecError(f"run directory is not a directory: {script_dir}")
+
+    script_paths = sorted(path for path in script_dir.iterdir() if path.is_file() and path.suffix == ".py")
+    if not script_paths:
+        raise LaunchSpecError(f"no Python scripts found in run directory: {script_dir}")
+
+    specs = []
+    for script_path in script_paths:
+        run_name = paths.derive_run_name(script_path)
+        specs.append(
+            LaunchSpec(
+                run_name=run_name,
+                run_dir=paths.default_runs_root() / run_name,
+                script_path=script_path,
+                dry_run=dry_run,
+            )
+        )
+    return specs
+
+
+def build_launch_specs(args: argparse.Namespace) -> list[LaunchSpec]:
+    """Resolves one parsed `gepa`/`autumn run` command into concrete runs.
+
+    The normal form still launches exactly one script. Directory mode is only
+    selected when no positional script is present and `--run-dir` points at the
+    directory of scripts to discover.
+    """
+    if args.script is not None:
+        return [build_launch_spec(args)]
+    if args.run_dir is None:
+        raise LaunchSpecError("script is required unless --run-dir points to a directory of scripts")
+    if args.name is not None:
+        raise LaunchSpecError("--name can't be used with directory run mode")
+    return _discover_directory_specs(Path(args.run_dir), dry_run=args.dry_run)
+
+
+def parse_gepa_command(tokens: list[str]) -> list[LaunchSpec]:
     """Parses the tokens following a `gepa ` prefix typed into InputScreen
     (e.g. `["myscript.py", "--dry-run"]`) with the exact same grammar as
-    `autumn run` (`_add_run_arguments`), then resolves them into a
-    `LaunchSpec` exactly as `build_launch_spec` does for the CLI.
+    `autumn run` (`_add_run_arguments`), then resolves them into one or more
+    `LaunchSpec`s exactly as `build_launch_specs` does for the CLI.
 
     Raises `LaunchSpecError` -- never `SystemExit`, unlike the CLI's own
     argparse invocation -- on bad flags, a missing positional, or a script
@@ -121,16 +163,17 @@ def parse_gepa_command(tokens: list[str]) -> LaunchSpec:
     _add_run_arguments(parser)
     args = parser.parse_args(tokens)
 
-    spec = build_launch_spec(args)
-    if not spec.script_path.exists():
-        raise LaunchSpecError(f"script not found: {spec.script_path}")
-    return spec
+    specs = build_launch_specs(args)
+    for spec in specs:
+        if not spec.script_path.exists():
+            raise LaunchSpecError(f"script not found: {spec.script_path}")
+    return specs
 
 
-def parse_command_line(text: str) -> LaunchSpec | None:
+def parse_command_line(text: str) -> list[LaunchSpec] | None:
     """Parses one submitted line of free text from either InputScreen or
-    CommandBar into a `LaunchSpec`, or `None` if it isn't a `gepa ...` command
-    at all (a chat prompt) -- the shared classification both
+    CommandBar into one or more `LaunchSpec`s, or `None` if it isn't a
+    `gepa ...` command at all (a chat prompt) -- the shared classification both
     surfaces use so they can't drift apart on what counts as a launch command.
 
     `text` is assumed already stripped and non-empty (both callers handle the
@@ -224,11 +267,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _run(args: argparse.Namespace) -> int:
+    try:
+        specs = build_launch_specs(args)
+    except LaunchSpecError as exc:
+        print(str(exc))
+        return 2
+    spec = specs[0]
+
     # Imported lazily so that `autumn` (no subcommand) and `autumn --help`
     # don't require Textual to be importable just to print a message.
     from autumn.app import AutumnApp
-
-    spec = build_launch_spec(args)
 
     app = AutumnApp(
         runs_root=paths.default_runs_root(),
@@ -236,6 +284,7 @@ def _run(args: argparse.Namespace) -> int:
         run_dir=spec.run_dir,
         script_path=spec.script_path,
         dry_run=spec.dry_run,
+        initial_queue=specs[1:],
         queue_sessions_root=paths.sessions_root(),
         prompt_routing_policy=groq_policy.build_policy(),
     )

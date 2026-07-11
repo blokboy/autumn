@@ -163,6 +163,7 @@ class AutumnApp(App):
         is_model_runtime_available: model_router.RuntimeAvailability | None = None,
         prompt_routing_policy: PromptRoutingPolicy | None = None,
         model_download_fn: model_downloader.DownloadFile | None = None,
+        initial_queue: list[LaunchSpec | str] | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(_AUTUMN_THEME)
@@ -231,7 +232,7 @@ class AutumnApp(App):
         # `_poll_queue_advance` is currently watching for a RUNNING -> terminal
         # transition -- always `self.state` as of the last time a live run was
         # (re)started, so the poll never fires twice for the same run.
-        self.pending_queue: list[LaunchSpec | str] = []
+        self.pending_queue: list[LaunchSpec | str] = list(initial_queue or [])
         self._queued_prompt_refs: list[ChatMessage | None] = []
         self._queue_watch_state: DashboardState | None = self.state
 
@@ -258,6 +259,9 @@ class AutumnApp(App):
                 prompt_routing_policy=self._prompt_routing_policy,
             )
             self.push_screen(self._dashboard_screen)
+            if self.pending_queue:
+                self._persist_queue()
+                self.call_after_refresh(self._refresh_queue_panel)
             self._start_live_run()
         else:
             self._offer_resume_or_input_screen()
@@ -713,6 +717,17 @@ class AutumnApp(App):
         self.switch_screen(self._dashboard_screen)
         self._start_live_run()
 
+    def launch_gepa_runs(self, specs: list[LaunchSpec]) -> None:
+        """Launches the first parsed GEPA run and queues the rest in order."""
+        if not specs:
+            return
+        self.pending_queue.extend(specs[1:])
+        if len(specs) > 1:
+            self._persist_queue()
+        self.launch_gepa_run(specs[0])
+        if len(specs) > 1:
+            self.call_after_refresh(self._refresh_queue_panel)
+
     def _launch_spec_now(self, spec: LaunchSpec) -> None:
         """Launches `spec` against the already-mounted DashboardScreen (via
         `promote_to_live`, the same mechanism `action_resume` uses) rather than
@@ -781,23 +796,28 @@ class AutumnApp(App):
             return
 
         try:
-            spec = parse_command_line(text)
+            specs = parse_command_line(text)
         except LaunchSpecError as exc:
             self.notify(str(exc), severity="error")
             return
 
-        item: LaunchSpec | str = spec if spec is not None else text
-
         if self._run_is_live():
-            if spec is None:
+            if specs is None:
                 self._queued_prompt_refs.append(self._append_user_prompt(text))
-            self.pending_queue.append(item)
+                self.pending_queue.append(text)
+            else:
+                self.pending_queue.extend(specs)
             self._persist_queue()
             self._refresh_queue_panel()
             return
 
-        if spec is not None:
-            self._launch_spec_now(spec)
+        if specs is not None:
+            self.pending_queue.extend(specs[1:])
+            if len(specs) > 1:
+                self._persist_queue()
+            self._launch_spec_now(specs[0])
+            if len(specs) > 1:
+                self._refresh_queue_panel()
         else:
             user_message = self._append_user_prompt(text)
             self._answer_prompt_async(

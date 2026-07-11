@@ -54,7 +54,7 @@ class CommandBar(Vertical):
     def compose(self) -> ComposeResult:
         yield Static("", id="queue-preview")
         yield Input(
-            placeholder=": ask Autumn a question or gepa my_script.py --dry-run",
+            placeholder=": ask Autumn a question, gepa my_script.py, or gepa --run-dir examples/",
             id="command-bar-input",
         )
 
