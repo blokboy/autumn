@@ -154,13 +154,21 @@ class DashboardScreen(Screen):
         followed by the always-visible, never-routable Anthropic/OpenAI stub
         rows (#15) -- appended here rather than inside `build_entries` so
         `model_router.choose_model`'s routing catalog never sees them (see
-        `stub_providers.py` for why)."""
+        `stub_providers.py` for why).
+
+        Once Anthropic or OpenAI has a real, signed-in entry in `routable`
+        (#21 -- `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` set), that provider's
+        stub rows are dropped from the appended set so the same group is
+        never shown as both real and grayed-out simultaneously."""
         routable = (
             catalog.build_entries(self._model_catalog_root, policy=self._prompt_routing_policy)
             if self._model_catalog_root is not None
             else []
         )
-        return routable + stub_providers.disabled_provider_entries()
+        real_providers = {
+            entry.provider for entry in routable if entry.backend == "provider" and entry.provider is not None
+        }
+        return routable + stub_providers.disabled_provider_entries(exclude_providers=real_providers)
 
     def refresh_models(self) -> None:
         self.query_one("#models", ModelCatalogView).refresh_from_entries(self._catalog_entries())

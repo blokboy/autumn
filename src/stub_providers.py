@@ -24,6 +24,17 @@ routing catalog (`model_router.choose_model`) never do.
 No environment variable is read and no network call is ever made here --
 these are static, hardcoded rows, same spirit as `GROQ_MODELS` in
 `groq_runner.py` or `CURATED_MODELS` in `curated_models.py`.
+
+As of #21, Anthropic and OpenAI can each have a *real*, policy-driven catalog
+entry once their respective `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` is set (see
+`anthropic_policy.py`/`openai_policy.py`, consumed the same way
+`groq_policy.py` always has been). `disabled_provider_entries`'s
+`exclude_providers` parameter lets a caller that already knows which
+providers have a real entry this call (e.g.
+`screens/dashboard_screen.py::_catalog_entries`, from
+`catalog.build_entries`'s output) skip that provider's stub rows entirely --
+so a signed-in provider's group is never shown both as real, selectable rows
+*and* grayed-out stub rows at the same time.
 """
 
 from models import CatalogEntry
@@ -41,11 +52,18 @@ _STUB_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 
 
-def disabled_provider_entries() -> list[CatalogEntry]:
+def disabled_provider_entries(*, exclude_providers: set[str] | None = None) -> list[CatalogEntry]:
     """Always-present, never-eligible catalog rows for Anthropic/OpenAI, in
-    display order (Anthropic, then OpenAI). Unconditional -- no gating of
-    any kind, so these appear identically on every call regardless of
-    environment or sign-in state."""
+    display order (Anthropic, then OpenAI). Otherwise unconditional -- no
+    env var or network call gates these, so with `exclude_providers` empty
+    (or omitted) they appear identically on every call regardless of
+    environment or sign-in state.
+
+    `exclude_providers`, if given, drops a provider's stub rows entirely --
+    e.g. `{"anthropic"}` skips both Anthropic stub rows while still
+    returning OpenAI's. Used when that provider already has a real,
+    eligible entry elsewhere in the catalog (see module docstring)."""
+    skip = exclude_providers or set()
     return [
         CatalogEntry(
             group=group,
@@ -55,5 +73,6 @@ def disabled_provider_entries() -> list[CatalogEntry]:
             disabled=True,
         )
         for group, provider, names in _STUB_GROUPS
+        if provider not in skip
         for name in names
     ]
