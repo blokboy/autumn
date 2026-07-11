@@ -1,21 +1,41 @@
 """Behavioral tests for the first-run model picker/download flow."""
 
+import dataclasses
+import hashlib
 from pathlib import Path
 
+import pytest
 from textual.widgets import SelectionList
 
 import local_models
+import screens.model_picker_screen as model_picker_screen
 from app import AutumnApp
 from curated_models import CURATED_MODELS
 from screens.dashboard_screen import DashboardScreen
 from screens.input_screen import InputScreen
 from screens.model_picker_screen import ModelPickerScreen
 
+_FAKE_CONTENT = b"fake gguf bytes"
+_FAKE_CONTENT_SHA256 = hashlib.sha256(_FAKE_CONTENT).hexdigest()
+
 
 def _fake_download_file(url: str, destination: Path, on_progress) -> None:
-    destination.write_bytes(b"fake gguf bytes")
+    destination.write_bytes(_FAKE_CONTENT)
     if on_progress is not None:
-        on_progress(len(b"fake gguf bytes"), len(b"fake gguf bytes"))
+        on_progress(len(_FAKE_CONTENT), len(_FAKE_CONTENT))
+
+
+@pytest.fixture(autouse=True)
+def _patch_curated_models_checksum(monkeypatch):
+    """`_fake_download_file` above always writes the same fixed payload
+    regardless of which curated model was picked -- these tests exercise
+    the picker/download-screen flow, not real HF downloads or checksum
+    verification itself (see test_model_downloader.py for that). Point
+    each curated model's pinned checksum at that fixed payload's checksum
+    so `download_and_install`'s real checksum verification doesn't reject
+    it here."""
+    patched = [dataclasses.replace(entry, sha256=_FAKE_CONTENT_SHA256) for entry in CURATED_MODELS]
+    monkeypatch.setattr(model_picker_screen, "CURATED_MODELS", patched)
 
 
 async def test_empty_catalog_shows_model_picker_first(tmp_path):
