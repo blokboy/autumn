@@ -78,6 +78,7 @@ class DashboardScreen(Screen):
         live_state: DashboardState | None = None,
         chat_messages: list[ChatMessage] | None = None,
         chat_model_status: str | None = None,
+        chat_tool_status: str | None = None,
         model_catalog_root: Path | None = None,
         prompt_routing_policy: PromptRoutingPolicy | None = None,
         initial_tab: str | None = None,
@@ -94,6 +95,7 @@ class DashboardScreen(Screen):
         self._summaries = registry.merge_live(registry.scan(self._runs_root), live_state)
         self._chat_messages = chat_messages or []
         self._chat_model_status = chat_model_status
+        self._chat_tool_status = chat_tool_status
         self._last_seen_live_version = live_state.version if live_state is not None else -1
 
         initial = self._summaries[0] if self._summaries else None
@@ -119,6 +121,7 @@ class DashboardScreen(Screen):
                     ChatView(
                         self._chat_messages,
                         model_status=self._chat_model_status,
+                        tool_status=self._chat_tool_status,
                         id="chat",
                     ),
                     id="chat-tab",
@@ -174,10 +177,12 @@ class DashboardScreen(Screen):
         self,
         messages: list[ChatMessage],
         model_status: str | None = None,
+        tool_status: str | None = None,
     ) -> None:
         self._chat_messages = messages
         self._chat_model_status = model_status
-        self.query_one("#chat", ChatView).refresh_from_messages(messages, model_status)
+        self._chat_tool_status = tool_status
+        self.query_one("#chat", ChatView).refresh_from_messages(messages, model_status, tool_status)
 
     def on_list_view_highlighted(self, message: ListView.Highlighted) -> None:
         item = message.item

@@ -35,7 +35,7 @@ class _ScriptedGroqRunner:
         self._gates[self._released].set()
         self._released += 1
 
-    def generate_stream(self, messages, model_name, *, on_chunk, cancel_event=None):
+    def generate_stream(self, messages, model_name, *, on_chunk, cancel_event=None, on_status=None, on_citation=None):
         for chunk, gate in zip(self._chunks, self._gates):
             gate.wait(timeout=5)
             if cancel_event is not None and cancel_event.is_set():

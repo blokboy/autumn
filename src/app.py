@@ -32,6 +32,7 @@ from models import (
     ModelChoice,
     PromptRoutingPolicy,
     RunStatus,
+    ToolCitation,
 )
 from screens.confirm_screen import ConfirmScreen
 from screens.dashboard_screen import DashboardScreen
@@ -187,6 +188,17 @@ class AutumnApp(App):
         )
         self.chat_messages: list[ChatMessage] = []
         self._chat_model_status: str | None = None
+        # Transient "Searching docs for '...'"-style status shown while a
+        # Groq tool-call round is in flight (see
+        # docs/prd/chat-search-tools.md, "Tool-call round"). Deliberately
+        # NOT part of ChatMessage/chat_store persistence -- it's not part of
+        # the conversation, it's a fleeting UI signal that a background
+        # tool call is running, and it's meaningless once that call has
+        # already resolved (e.g. across a resumed session). Set from
+        # GroqRunner.generate_stream's `on_status` callback in
+        # `_run_stream_reply` below, cleared once the final answer's first
+        # chunk arrives (or, defensively, at the end of any turn).
+        self._chat_tool_status: str | None = None
         self._model_catalog_root = model_catalog_root or paths.models_root()
         self._local_model_runner = local_model_runner or LocalModelRunner()
         # Unlike `_local_model_runner`, not eagerly defaulted here:
@@ -443,7 +455,9 @@ class AutumnApp(App):
 
     def _refresh_chat_display(self) -> None:
         if hasattr(self, "_dashboard_screen"):
-            self._dashboard_screen.refresh_chat(self.chat_messages, self._chat_model_status)
+            self._dashboard_screen.refresh_chat(
+                self.chat_messages, self._chat_model_status, self._chat_tool_status
+            )
 
     def _finalize_assistant_reply(
         self,
@@ -458,6 +472,13 @@ class AutumnApp(App):
         callers that haven't already inserted `message` should use
         `_append_assistant_reply` instead."""
         self._chat_model_status = _model_status_for_reply(message, choice)
+        # Belt-and-suspenders clear: `_run_stream_reply`'s `on_chunk` already
+        # clears this the moment the first chunk of a real answer arrives,
+        # but any turn that finishes without ever reaching `on_chunk` (e.g.
+        # a decide-call error surfacing before the tool round completes)
+        # should still not leave a stale "Searching..." status showing once
+        # the turn is over.
+        self._chat_tool_status = None
         self._persist_chat()
         self._refresh_chat_display()
         if on_complete is not None:
@@ -491,6 +512,7 @@ class AutumnApp(App):
         stream: Callable[..., None],
         error_type: type[Exception],
         finalize_success: Callable[[ChatMessage], None] | None = None,
+        supports_tool_events: bool = False,
     ) -> None:
         """Shared skeleton for a streaming reply, used by both
         `_run_groq_stream` and `_run_local_stream`: inserts an empty
@@ -505,10 +527,19 @@ class AutumnApp(App):
         `finalize_success`, if given, post-processes the message only when
         the stream completed cleanly (no error, not cancelled) -- e.g.
         local's trailing-whitespace strip, which only makes sense for output
-        that actually finished rather than partial text."""
+        that actually finished rather than partial text.
+
+        `supports_tool_events`, if `True`, additionally passes `on_status`/
+        `on_citation` callbacks to `stream(...)` -- only `_run_groq_stream`
+        sets this, since only `GroqRunner.generate_stream` has anything to
+        report through them (see its docstring). `_run_local_stream` leaves
+        this `False` and its `stream` lambda keeps the exact
+        `on_chunk`/`cancel_event`-only signature it always had, so this
+        addition never touches the local `llama.cpp` streaming path."""
         message = ChatMessage(role="assistant", text="", model=choice.name)
         cancel_event = threading.Event()
         self._active_cancel_event = cancel_event
+        self._chat_tool_status = None
 
         self.call_from_thread(self._insert_assistant_message, message, insert_after=insert_after)
         self.call_from_thread(self._refresh_chat_display)
@@ -517,15 +548,34 @@ class AutumnApp(App):
 
         def on_chunk(text: str) -> None:
             nonlocal last_refresh
+            # The final answer's first chunk is exactly the moment a
+            # "Searching docs for '...'" status (if any) should disappear --
+            # see acceptance criteria in the #26 issue. Direct attribute
+            # write, no call_from_thread needed (same as `message.text`
+            # below): it's a plain Python object mutation, not a Textual
+            # widget update, and the throttled refresh just below picks it
+            # up on whichever call actually fires the refresh.
+            if self._chat_tool_status is not None:
+                self._chat_tool_status = None
             message.text += text
             now = time.monotonic()
             if now - last_refresh >= _STREAM_REFRESH_INTERVAL_SECONDS:
                 last_refresh = now
                 self.call_from_thread(self._refresh_chat_display)
 
+        def on_status(text: str) -> None:
+            self._chat_tool_status = text
+            self.call_from_thread(self._refresh_chat_display)
+
+        def on_citation(citation: ToolCitation) -> None:
+            message.citation = citation
+
         error: Exception | None = None
         try:
-            stream(on_chunk=on_chunk, cancel_event=cancel_event)
+            if supports_tool_events:
+                stream(on_chunk=on_chunk, cancel_event=cancel_event, on_status=on_status, on_citation=on_citation)
+            else:
+                stream(on_chunk=on_chunk, cancel_event=cancel_event)
         except error_type as exc:
             error = exc
 
@@ -573,10 +623,16 @@ class AutumnApp(App):
             choice=choice,
             insert_after=insert_after,
             on_complete=on_complete,
-            stream=lambda *, on_chunk, cancel_event: groq_runner.generate_stream(
-                snapshot, choice.name, on_chunk=on_chunk, cancel_event=cancel_event
+            stream=lambda *, on_chunk, cancel_event, on_status, on_citation: groq_runner.generate_stream(
+                snapshot,
+                choice.name,
+                on_chunk=on_chunk,
+                cancel_event=cancel_event,
+                on_status=on_status,
+                on_citation=on_citation,
             ),
             error_type=GroqRuntimeError,
+            supports_tool_events=True,
         )
 
     def _run_local_stream(

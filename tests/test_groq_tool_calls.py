@@ -11,6 +11,7 @@ the real SDK.
 """
 
 import json
+import threading
 from dataclasses import dataclass
 
 import groq
@@ -20,7 +21,7 @@ from textual.widgets import Input, Static
 import search_docs
 from app import AutumnApp
 from groq_runner import GroqRunner, GroqRuntimeError
-from models import ChatMessage, PromptRoutingPolicy, ProviderAccount, ProviderModel
+from models import ChatMessage, PromptRoutingPolicy, ProviderAccount, ProviderModel, ToolCitation
 from widgets.command_bar import CommandBar
 
 
@@ -73,6 +74,33 @@ class _FakeChunk:
 
 def _chunk(content: str | None) -> _FakeChunk:
     return _FakeChunk(choices=[_FakeStreamChoice(delta=_FakeDelta(content=content))])
+
+
+class _GatedFakeStream:
+    """Like `_FakeStream`, but blocks before yielding each chunk until
+    `release_next()` is called -- lets a test pause mid-stream and inspect
+    UI state (e.g. the tool-call status widget) deterministically instead
+    of racing real wall-clock timing. Same idiom as test_groq_streaming.py's
+    `_ScriptedGroqRunner`, one level lower (a fake stream rather than a
+    fake whole runner) so it works through a real `GroqRunner`."""
+
+    def __init__(self, chunks: list[_FakeChunk]):
+        self._chunks = chunks
+        self._gates = [threading.Event() for _ in chunks]
+        self._released = 0
+        self.closed = False
+
+    def release_next(self) -> None:
+        self._gates[self._released].set()
+        self._released += 1
+
+    def __iter__(self):
+        for chunk, gate in zip(self._chunks, self._gates):
+            gate.wait(timeout=5)
+            yield chunk
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _FakeStream:
@@ -378,6 +406,103 @@ def test_generate_stream_unknown_tool_name_is_surfaced_as_a_failure_too(tmp_path
     assert received[1:] == ["best effort answer"]
 
 
+# --- on_status / on_citation: the #26 status + citation contract ---------
+
+
+def test_generate_stream_calls_on_status_before_the_tool_executes(tmp_path):
+    """`on_status` fires once, with a "Searching docs for '<query>'" string
+    built from the decided tool call's own query argument, before the
+    second (streaming) call is even made -- so a caller has something to
+    show for the whole non-streaming decide/execute gap, not just the tail
+    end of it."""
+    _write_docs_corpus(tmp_path)
+    decision = _search_docs_tool_call_decision("what does --dry-run do")
+    stream_response = _FakeStream([_chunk("answer")])
+    client = _ToolCallingGroqClient(decision, stream_response)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    events: list[str] = []
+    runner.generate_stream(
+        [ChatMessage(role="user", text="what does --dry-run do")],
+        "llama-3.3-70b-versatile",
+        on_chunk=lambda text: events.append(f"chunk:{text}"),
+        on_status=lambda text: events.append(f"status:{text}"),
+    )
+
+    assert events[0] == "status:Searching docs for 'what does --dry-run do'"
+    assert events[1:] == ["chunk:answer"]
+
+
+def test_generate_stream_no_tool_call_never_invokes_on_status_or_on_citation(tmp_path):
+    """An answer that didn't use a tool gets neither a status nor a
+    citation -- both callbacks stay untouched on this path."""
+    decision = _no_tool_call_decision("Autumn is a GEPA dashboard CLI.")
+    client = _ToolCallingGroqClient(decision)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    status_calls: list[str] = []
+    citation_calls: list[ToolCitation] = []
+    runner.generate_stream(
+        [ChatMessage(role="user", text="what is autumn")],
+        "llama-3.3-70b-versatile",
+        on_chunk=lambda _: None,
+        on_status=status_calls.append,
+        on_citation=citation_calls.append,
+    )
+
+    assert status_calls == []
+    assert citation_calls == []
+
+
+def test_generate_stream_tool_success_invokes_on_citation_after_streaming_completes(tmp_path):
+    """A successful search_docs call attaches a ToolCitation naming the
+    grounding doc/section, delivered via `on_citation` only after the
+    second call's stream has already fully delivered its chunks -- so a
+    caller can render it "under" the finished answer."""
+    _write_docs_corpus(tmp_path)
+    decision = _search_docs_tool_call_decision("what does --dry-run do")
+    stream_response = _FakeStream([_chunk("`--dry-run`"), _chunk(" skips the real run.")])
+    client = _ToolCallingGroqClient(decision, stream_response)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    events: list[str] = []
+    citations: list[ToolCitation] = []
+    runner.generate_stream(
+        [ChatMessage(role="user", text="what does --dry-run do")],
+        "llama-3.3-70b-versatile",
+        on_chunk=lambda text: events.append(text),
+        on_citation=citations.append,
+    )
+
+    assert events == ["`--dry-run`", " skips the real run."]
+    assert citations == [ToolCitation(tool="search_docs", sources=["README.md — Usage"])]
+
+
+def test_generate_stream_tool_failure_never_invokes_on_citation(tmp_path, monkeypatch):
+    """A failed tool call grounded nothing -- `on_citation` is never called,
+    even though the second call still streams a best-effort answer."""
+
+    def _boom(arguments, root=None):
+        raise search_docs.SearchDocsError("could not read docs/README.md: [Errno 2] No such file or directory")
+
+    monkeypatch.setattr(search_docs, "run_tool", _boom)
+
+    decision = _search_docs_tool_call_decision("dry-run")
+    stream_response = _FakeStream([_chunk("best effort answer")])
+    client = _ToolCallingGroqClient(decision, stream_response)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    citations: list[ToolCitation] = []
+    runner.generate_stream(
+        [ChatMessage(role="user", text="dry-run")],
+        "llama-3.3-70b-versatile",
+        on_chunk=lambda _: None,
+        on_citation=citations.append,
+    )
+
+    assert citations == []
+
+
 # --- End-to-end: real chat call site, through AutumnApp -------------------
 
 
@@ -447,15 +572,109 @@ async def test_dashboard_chat_asks_a_docs_question_and_gets_a_grounded_answer_en
                 role="assistant",
                 text="`--dry-run` replays scripted events instead of running the script for real.",
                 model="llama-3.3-70b-versatile",
+                citation=ToolCitation(tool="search_docs", sources=["README.md — Usage"]),
             ),
         ]
         status_text = app.screen.query_one("#chat-model-status", Static).content
         assert "Model: llama-3.3-70b-versatile (provider available)" in str(status_text)
         chat_text = app.screen.query_one("#chat-transcript", Static).content
         assert "--dry-run" in str(chat_text)
+        # The citation shows up under the grounded answer in the transcript...
+        assert "Source: README.md — Usage" in str(chat_text)
+        # ...and the transient "Searching..." status is gone once the turn
+        # (and the citation it fed) has fully landed.
+        tool_status_text = app.screen.query_one("#chat-tool-status", Static).content
+        assert str(tool_status_text) == ""
 
         # The decide call really did see the grounded doc content.
         [_decide_call, second_call] = client.seen_calls
         tool_entry = second_call["messages"][2]
         assert "README.md" in tool_entry["content"]
         assert "--dry-run" in tool_entry["content"]
+
+
+async def test_dashboard_chat_shows_search_status_while_tool_runs_and_clears_once_streaming_starts(tmp_path):
+    """Acceptance criteria: a visible status names the tool and query as
+    soon as the tool call is dispatched, and is gone by the time the final
+    answer's text has started rendering -- exercised with a gated fake
+    stream so the test can deterministically observe the mid-round-trip
+    state instead of racing real timing."""
+    docs_root = tmp_path / "corpus"
+    docs_root.mkdir()
+    _write_docs_corpus(docs_root)
+
+    decision = _search_docs_tool_call_decision("what does --dry-run do")
+    stream_response = _GatedFakeStream([_chunk("`--dry-run`"), _chunk(" skips the real run.")])
+    client = _ToolCallingGroqClient(decision, stream_response)
+    real_runner_with_fake_client = GroqRunner(client=client, docs_root=docs_root)
+
+    app = AutumnApp(
+        runs_root=tmp_path / "runs",
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=tmp_path / "models",
+        groq_runner=real_runner_with_fake_client,
+        prompt_routing_policy=_groq_policy_with_default(),
+    )
+
+    async with app.run_test() as pilot:
+        await _land_on_dashboard_and_submit(pilot, "what does --dry-run do")
+
+        # The decide call and the (fast, synchronous) tool execution have
+        # already happened by now; the background thread is blocked inside
+        # the gated stream waiting for its first chunk to be released, so
+        # the status should already be visible.
+        status_text = ""
+        for _ in range(40):
+            await pilot.pause(0.05)
+            status_text = str(app.screen.query_one("#chat-tool-status", Static).content)
+            if status_text:
+                break
+        assert status_text == "Searching docs for 'what does --dry-run do'"
+        # Nothing has streamed into the transcript yet.
+        chat_text = str(app.screen.query_one("#chat-transcript", Static).content)
+        assert "--dry-run` skips" not in chat_text
+
+        stream_response.release_next()
+        stream_response.release_next()
+        await pilot.pause(0.2)
+
+        # The status is cleared now that the final answer has streamed in.
+        status_text = str(app.screen.query_one("#chat-tool-status", Static).content)
+        assert status_text == ""
+        chat_text = str(app.screen.query_one("#chat-transcript", Static).content)
+        assert "`--dry-run` skips the real run." in chat_text
+
+
+async def test_dashboard_chat_answer_without_a_tool_call_shows_no_status_or_citation(tmp_path):
+    """Acceptance criteria: an answer that didn't use a tool renders exactly
+    as it did before this ticket -- no status ever appears, and no citation
+    line gets added under it."""
+    decision = _no_tool_call_decision("Autumn is a GEPA dashboard CLI.")
+    client = _ToolCallingGroqClient(decision)
+    real_runner_with_fake_client = GroqRunner(client=client, docs_root=tmp_path)
+
+    app = AutumnApp(
+        runs_root=tmp_path / "runs",
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=tmp_path / "models",
+        groq_runner=real_runner_with_fake_client,
+        prompt_routing_policy=_groq_policy_with_default(),
+    )
+
+    async with app.run_test() as pilot:
+        await _land_on_dashboard_and_submit(pilot, "what is autumn")
+        await pilot.pause(0.2)
+
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="what is autumn"),
+            ChatMessage(
+                role="assistant",
+                text="Autumn is a GEPA dashboard CLI.",
+                model="llama-3.3-70b-versatile",
+            ),
+        ]
+        chat_text = str(app.screen.query_one("#chat-transcript", Static).content)
+        assert "Autumn is a GEPA dashboard CLI." in chat_text
+        assert "Source" not in chat_text
+        tool_status_text = str(app.screen.query_one("#chat-tool-status", Static).content)
+        assert tool_status_text == ""
