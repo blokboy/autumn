@@ -2,67 +2,201 @@
 
 ![autumn landing screen](docs/landing-screenshot.png)
 
-`autumn` is a CLI for agent interactions, along with monitoring [GEPA](https://github.com/gepa-ai/gepa) optimization runs live. Choose which models you would like to make available to autumn for routing and monitor activity from the dashboard. That's it. 
+`autumn` is a terminal command center for [GEPA](https://github.com/gepa-ai/gepa) prompt-optimization runs and model-backed agent workflows. It gives you a live Textual dashboard for runs, a persistent chat surface, local and hosted model routing, first-run model setup, provider key management, and lightweight subagents without leaving your terminal.
 
 Inspired by [Torlink](https://github.com/baairon/torlink) and built with [Textual](https://textual.textualize.io/).
 
+## Highlights
+
+- **Live GEPA dashboard** - watch optimization runs in real time with Overview, Candidates, Log, Chat, and Models tabs.
+- **Historical run browser** - browse past runs from Autumn's run registry, with status, best score, candidate count, and log/candidate detail.
+- **One shared chat** - ask questions from the landing screen or dashboard command bar; the transcript is persisted and can be resumed after relaunch.
+- **Local and hosted model routing** - route prompts through local `llama.cpp` models, Groq, Anthropic, OpenAI, or the built-in `autumn/offline-tiny` fallback.
+- **First-run model picker** - choose from curated small GGUF models and let Autumn download them in the background while you enter the dashboard.
+- **Unified model catalog** - manage installed local models, provider-backed models, one default selection, and fallback behavior from the Models tab.
+- **Streaming replies and cancellation** - Groq and local `llama.cpp` replies stream into chat; press `escape` to stop an in-flight generation while keeping partial output.
+- **Chat tools for project state** - Groq-routed chat can search Autumn's own docs, list models, list configured providers, and list runs.
+- **Confirmation-gated system actions** - chat can install curated models, set defaults, and add/remove keys after explicit confirmation.
+- **Subagents** - run one-shot subagents from the CLI or dashboard chat, with named participants, queueing, fallback warnings, and cancellation.
+
 ## Install
+
+For development:
 
 ```bash
 pip install -e .
 ```
 
-## Features
-
-- **Live run dashboard** — Overview (status, iteration/budget progress, best candidate), Candidates (sortable table of every candidate with Pareto-front markers), and a streaming Log tab, all updating in real time while a GEPA run is active.
-- **Run browser** — every past run under your runs root is listed in a sidebar, live or historical, fully navigable without a run active.
-- **One shared chat** — ask Autumn questions from the landing screen or the dashboard's command bar; both feed the same persisted conversation, visible in the Chat tab.
-- **Local model routing with fallback** — prompts try your configured default model first, fall back to any other installed runnable model, and finally to a built-in offline responder — never silently swallowing a model's own error.
-- **Run queueing** — launch a `gepa ...` run or ask a question while another run is live, and it queues automatically, processing everything in submission order once the run finishes.
-- **Resume on relaunch** — if `autumn` exits with pending queued commands or an unfinished chat, the next launch offers to resume or start fresh.
-- **Model catalog management** — install, list, default, and remove local `llama.cpp` models from the CLI or the dashboard's Models tab.
-```bash
-autumn models install tiny ./tiny.gguf --backend llama.cpp --context-window 2048
-autumn models list
-autumn models default tiny
-autumn models remove tiny
-```
-
-## Release
-
-The PyPI distribution is published as `autumn-cli` (plain `autumn` was already taken by an unrelated package), but the installed console command is still `autumn`. Releases are cut by hand -- a maintainer with PyPI access bumps `version` in `pyproject.toml` and, from the repo root, runs:
-
-```bash
-python -m build
-twine upload dist/*
-```
-
-## Usage
+The published package name is `autumn-cli`, because `autumn` was already taken on PyPI. The installed console command is still:
 
 ```bash
 autumn
 ```
 
-Bare `autumn` opens on a landing screen with a single input field. Press Enter on an empty line to drop into browse mode: it scans the runs directory (`$XDG_DATA_HOME/autumn/runs`, falling back to `~/.local/share/autumn/runs`) and lets you browse any past run's full Overview/Candidates/Log/Chat/Models tabs, reading straight from GEPA's own on-disk JSON files. Move the sidebar cursor (arrows or `j`/`k`) to preview a different run. Typing `gepa <script.py> [--dry-run] [--name ...] [--run-dir ...]` launches a live run identically to `autumn run <script.py>` below, without leaving the TUI. Typing `gepa --run-dir <directory>` discovers direct child `*.py` scripts in that directory, skips files like `README.md`, launches the first script, and queues the rest. Any other non-empty input becomes a dashboard chat prompt, persisted for the life of the session and offered for resume if the process exits before the transcript is cleared.
+## Quick Start
 
-Once inside the dashboard, press `:` to focus the persistent command bar at the bottom. Submitting a `gepa <script.py> ...` command there launches it immediately if nothing is running, or appends it to a visible, in-memory queue if a run is already live -- the next queued item auto-starts as soon as the current run finishes or is stopped. Submitting `gepa --run-dir <directory>` expands to the sorted direct child `*.py` scripts and queues them in order. Submitting any other text appends it to the shared dashboard chat immediately and answers asynchronously with the selected local model policy; if a run is live, the prompt is still recorded and shown right away, but its answer joins the same queue as pending `gepa` commands and is generated once the run reaches a terminal state, in the order everything was submitted.
-
-```bash
-autumn runs [--json]
-```
-
-Non-interactive counterpart to bare `autumn`: prints the same run list as a plain-text table (or a JSON array with `--json`) and exits, without opening the TUI.
-
-Manages Autumn's local model catalog under `$XDG_DATA_HOME/autumn/models` (falling back to `~/.local/share/autumn/models`). Installed model files are copied into Autumn's managed catalog, one model can be marked as the default, and `autumn models list --json` prints the catalog for scripting. The dashboard's Models tab shows the installed catalog and lets you press `d` to make the highlighted model the default.
-
-For `llama.cpp` models, Autumn tries the catalog's default model first, then any other installed, runnable model, before finally falling back to the built-in `autumn/offline-tiny`. If `llama-cli` is not on `PATH`, set `AUTUMN_LLAMA_CLI=/path/to/llama-cli`. When every installed model's runtime is unavailable or fails to start, the Chat tab falls back to `autumn/offline-tiny` and shows the original reason above the transcript; if a model's runtime does start but the model itself returns an error, that error is shown as-is in the transcript instead of being silently replaced by a fallback reply.
+Launch Autumn:
 
 ```bash
-autumn run <script.py> --dry-run
+autumn
 ```
-Launches the live dashboard. Without `--dry-run`, `<script.py>` is run for real: autumn monkeypatches `gepa.optimize`/`gepa.optimize_anything` and executes the script unmodified via `runpy`, streaming its real `GEPACallback` events into the dashboard live. `--dry-run` instead replays a scripted, dependency-free sequence of optimization events against it (no real GEPA run required) so you can see the sidebar, status, iteration/budget progress, and best-candidate summary update live; the sidebar still shows the full run registry, with the live run pinned first. `<script.py>` is not executed in `--dry-run` mode -- it's only used to derive the run's display name.
+
+On a fresh install, Autumn offers a curated local model picker. Pick one or more models to download from Hugging Face, or skip and use hosted providers/offline fallback. Downloads continue in the background and show progress in the command bar.
+
+Press Enter on an empty landing input to browse previous runs. Type a `gepa ...` command to launch a run. Type anything else to start a chat.
+
+```bash
+gepa fixtures/examples/priority_triage.py --dry-run
+```
+
+Inside the dashboard, press `:` to focus the command bar.
+
+## GEPA Runs
+
+Run a script directly:
+
+```bash
+autumn run fixtures/examples/priority_triage.py
+```
+
+Preview the dashboard without executing the script:
+
+```bash
+autumn run fixtures/examples/priority_triage.py --dry-run
+```
+
+Run every direct child Python script in a directory:
 
 ```bash
 autumn run --run-dir fixtures/examples
 ```
-Discovers and runs the direct child Python scripts in a directory, skipping non-Python files. The first script starts immediately and the rest are placed in Autumn's normal run queue.
+
+List known runs without opening the TUI:
+
+```bash
+autumn runs
+autumn runs --json
+```
+
+Autumn monkeypatches `gepa.optimize` and `gepa.optimize_anything`, runs your script via `runpy`, and streams real `GEPACallback` events into the dashboard. Runs are stored under `$XDG_DATA_HOME/autumn/runs`, falling back to `~/.local/share/autumn/runs`.
+
+## Dashboard
+
+The dashboard has five main tabs:
+
+- **Overview** - run status, iteration/budget progress, and current best candidate.
+- **Candidates** - sortable candidate table with Pareto-front markers.
+- **Log** - streaming event log for the selected run.
+- **Chat** - shared conversation with Autumn, including model status, tool status, citations, and subagent messages.
+- **Models** - grouped catalog of local and provider models, with `d` to set the highlighted model as default.
+
+The sidebar lists live and historical runs. Move through it with arrows or `j`/`k`.
+
+## Models
+
+Autumn can use local models managed under `$XDG_DATA_HOME/autumn/models` or hosted provider models when API keys are configured.
+
+Local model commands:
+
+```bash
+autumn models install tiny ./tiny.gguf --backend llama.cpp --context-window 2048
+autumn models list
+autumn models list --json
+autumn models default tiny
+autumn models remove tiny
+```
+
+Provider key commands:
+
+```bash
+autumn keys add groq "$GROQ_API_KEY"
+autumn keys add anthropic "$ANTHROPIC_API_KEY"
+autumn keys add openai "$OPENAI_API_KEY"
+autumn keys list
+autumn keys remove groq
+```
+
+Stored keys override environment variables. Key values are never printed by `autumn keys list` or by chat's key-listing tool.
+
+Autumn currently knows these hosted model groups:
+
+- **Groq** - `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `gemma2-9b-it`
+- **Anthropic** - `claude-sonnet-5`, `claude-opus-4-8`, `claude-haiku-4-5`
+- **OpenAI** - `gpt-4o`, `gpt-4o-mini`, `gpt-4.1-mini`
+
+If the selected default is unavailable, Autumn falls through the catalog and then to `autumn/offline-tiny`.
+
+## Chat
+
+Chat is available from the landing screen and from the dashboard command bar. It can answer directly through the active model, or, when routed through Groq, use tool calls to inspect Autumn's project and local state.
+
+Groq-routed chat can:
+
+- Search `docs/**/*.md`, `README.md`, and `AGENTS.md`, with source citations.
+- List installed local models.
+- List which providers have configured keys without revealing key values.
+- List known GEPA runs.
+- Install curated models, set the default model, add keys, remove models, and remove keys after confirmation.
+
+Destructive actions require a confirmation dialog with a short delay before the confirm button is enabled.
+
+## Subagents
+
+Run a one-shot subagent from the CLI:
+
+```bash
+autumn subagent "Summarize the latest run results"
+```
+
+Launch dashboard subagents from chat:
+
+```text
+/subagent Compare the top candidates and explain the tradeoffs
+/subagent cancel Autumn Sub Agent 1
+```
+
+Dashboard subagents appear as named chat participants, run alongside normal chat, queue after four concurrent workers, and report fallback warnings when the routed model changes.
+
+## Queueing and Resume
+
+Autumn keeps command submission ordered:
+
+- Submit `gepa ...` while a run is live and it queues behind the active run.
+- Submit chat while a run is live and the prompt is recorded immediately, then answered in order.
+- Submit `gepa --run-dir <directory>` and each direct child Python script is queued in sorted order.
+
+Pending queues and unfinished chat sessions are persisted. On relaunch, Autumn offers to resume or start fresh.
+
+## Configuration Paths
+
+Autumn uses XDG-style paths:
+
+- Runs: `$XDG_DATA_HOME/autumn/runs` or `~/.local/share/autumn/runs`
+- Models: `$XDG_DATA_HOME/autumn/models` or `~/.local/share/autumn/models`
+- Provider keys: Autumn's credentials JSON, written with `0600` permissions
+
+For `llama.cpp` models, `llama-cli` must be on `PATH`, or set:
+
+```bash
+export AUTUMN_LLAMA_CLI=/path/to/llama-cli
+```
+
+## Roadmap
+
+The current PRDs and issues point at a few active themes:
+
+- Web search through Tavily with explicit/autonomous search modes.
+- More autonomous chat controls with careful confirmation boundaries.
+- Continued hardening of curated model downloads.
+- More capable subagent workflows and run-control tools.
+
+See `docs/prd/` and the GitHub issue tracker for the detailed working specs.
+
+## Release
+
+Releases are cut manually by a maintainer with PyPI access:
+
+```bash
+python -m build
+twine upload dist/*
+```
