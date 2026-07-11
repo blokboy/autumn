@@ -39,7 +39,7 @@ _GEPA_PREFIX = "gepa "
 # before they're wired up as real completion providers (see #21) -- keeps
 # `autumn keys list` showing the full expected set rather than only whatever
 # happens to already have a stored key.
-_KNOWN_PROVIDERS = ("groq", "anthropic", "openai")
+_KNOWN_PROVIDERS = ("groq", "anthropic", "openai", "tavily")
 
 
 class LaunchSpecError(ValueError):

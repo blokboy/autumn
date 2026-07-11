@@ -66,3 +66,10 @@ def test_resolve_key_returns_none_when_neither_source_has_a_key(monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
 
     assert credentials.resolve_key("groq", "GROQ_API_KEY") is None
+
+
+def test_resolve_key_prefers_stored_over_env_var_for_tavily(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "from-env")
+    credentials.set_key("tavily", "from-store")
+
+    assert credentials.resolve_key("tavily", "TAVILY_API_KEY") == "from-store"

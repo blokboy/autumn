@@ -215,6 +215,7 @@ def test_keys_list_shows_configured_and_not_configured(monkeypatch, capsys):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     credentials.set_key("groq", "gsk_abc123")
 
     result = cli.main(["keys", "list"])
@@ -224,6 +225,7 @@ def test_keys_list_shows_configured_and_not_configured(monkeypatch, capsys):
     assert "groq       configured" in output
     assert "anthropic  not configured" in output
     assert "openai     not configured" in output
+    assert f"{'tavily':<10} not configured" in output
 
 
 def test_keys_list_reflects_env_var_without_any_stored_key(monkeypatch, capsys):
@@ -266,3 +268,25 @@ def test_keys_remove_does_not_affect_env_var_fallback(monkeypatch, capsys):
 
     assert result == 0
     assert "groq       configured" in capsys.readouterr().out
+
+
+def test_keys_add_accepts_tavily(capsys):
+    import credentials
+
+    result = cli.main(["keys", "add", "tavily", "tvly-abc123"])
+
+    assert result == 0
+    assert "stored a key for tavily" in capsys.readouterr().out
+    assert credentials.get_key("tavily") == "tvly-abc123"
+
+
+def test_keys_remove_accepts_tavily(capsys):
+    import credentials
+
+    credentials.set_key("tavily", "tvly-abc123")
+
+    result = cli.main(["keys", "remove", "tavily"])
+
+    assert result == 0
+    assert "removed the stored key for tavily" in capsys.readouterr().out
+    assert credentials.get_key("tavily") is None
