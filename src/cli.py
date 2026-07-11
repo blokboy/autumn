@@ -35,11 +35,10 @@ import credentials, groq_policy, local_models, paths, registry
 
 _GEPA_PREFIX = "gepa "
 
-# Providers `autumn keys` knows the *names* of, for listing purposes, even
-# before they're wired up as real completion providers (see #21) -- keeps
-# `autumn keys list` showing the full expected set rather than only whatever
-# happens to already have a stored key.
-_KNOWN_PROVIDERS = ("groq", "anthropic", "openai", "tavily")
+# `credentials.KNOWN_PROVIDERS` is the single source of truth for the known
+# provider set -- shared with the `list_keys` chat tool (see
+# `list_keys.py`) so both surfaces show the same expected set.
+_KNOWN_PROVIDERS = credentials.KNOWN_PROVIDERS
 
 
 class LaunchSpecError(ValueError):
@@ -430,13 +429,6 @@ def _models(args: argparse.Namespace) -> int:
     return 1
 
 
-def _env_var_for_provider(provider: str) -> str:
-    """`groq` -> `GROQ_API_KEY`, matching the naming convention every
-    provider's own module already reads its env var by (see
-    `groq_policy.ENV_VAR`)."""
-    return f"{provider.upper()}_API_KEY"
-
-
 def _keys(args: argparse.Namespace) -> int:
     command = args.keys_command
 
@@ -447,7 +439,7 @@ def _keys(args: argparse.Namespace) -> int:
 
     if command == "list":
         for provider in _KNOWN_PROVIDERS:
-            configured = credentials.resolve_key(provider, _env_var_for_provider(provider)) is not None
+            configured = credentials.resolve_key(provider, credentials.env_var_for_provider(provider)) is not None
             print(f"{provider:<10} {'configured' if configured else 'not configured'}")
         return 0
 
