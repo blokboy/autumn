@@ -39,6 +39,7 @@ def _model_from_dict(raw: dict) -> LocalModel | None:
     path = raw.get("path")
     context_window = raw.get("context_window")
     is_default = raw.get("is_default")
+    status = raw.get("status")
     if not isinstance(name, str) or not name:
         return None
     if not isinstance(backend, str) or not backend:
@@ -47,12 +48,19 @@ def _model_from_dict(raw: dict) -> LocalModel | None:
         return None
     if context_window is not None and not isinstance(context_window, int):
         return None
+    if status not in ("installed", "downloading"):
+        # Missing (older manifests written before #20) or malformed -> a
+        # fully-installed model is by far the common case, so that's the
+        # safe default rather than silently treating an old manifest's
+        # models as unavailable.
+        status = "installed"
     return LocalModel(
         name=name,
         backend=backend,
         path=Path(path),
         context_window=context_window,
         is_default=bool(is_default),
+        status=status,
     )
 
 
@@ -63,6 +71,7 @@ def _model_to_dict(model: LocalModel) -> dict:
         "path": str(model.path),
         "context_window": model.context_window,
         "is_default": model.is_default,
+        "status": model.status,
     }
 
 
@@ -98,6 +107,42 @@ def install_model(
     return installed
 
 
+def mark_downloading(
+    catalog_root: Path,
+    *,
+    name: str,
+    backend: str = _DEFAULT_BACKEND,
+    context_window: int | None = None,
+) -> LocalModel:
+    """Registers `name` in the manifest as "downloading" -- occupying a
+    catalog slot (so `list_models` is non-empty, meaning the first-run
+    picker won't reappear, and a default can already be recorded) before any
+    bytes have actually landed on disk. `is_default` is computed with the
+    exact same "first one in an otherwise-default-less catalog" rule
+    `install_model` uses below, so a picked model that becomes the eventual
+    default is already marked as such while it's still downloading -- which
+    is the "default chosen but not yet runnable" state `model_router.
+    choose_model` (see `_availability`'s `status == "downloading"` check)
+    falls through on, mirroring how a missing local runtime already falls
+    through today.
+
+    `model_downloader.download_and_install`'s call into `install_model` once
+    the download finishes overwrites this placeholder outright (same name ->
+    replaced), flipping it back to `status="installed"` with a real path."""
+    models = [model for model in list_models(catalog_root) if model.name != name]
+    placeholder = LocalModel(
+        name=name,
+        backend=backend,
+        path=catalog_root / name / ".downloading",
+        context_window=context_window,
+        is_default=not any(model.is_default for model in models),
+        status="downloading",
+    )
+    models.append(placeholder)
+    _save_manifest(catalog_root, {"models": [_model_to_dict(model) for model in models]})
+    return placeholder
+
+
 def set_default(catalog_root: Path, name: str) -> LocalModel:
     models = list_models(catalog_root)
     selected: LocalModel | None = None
@@ -110,6 +155,7 @@ def set_default(catalog_root: Path, name: str) -> LocalModel:
             path=model.path,
             context_window=model.context_window,
             is_default=is_default,
+            status=model.status,
         )
         if is_default:
             selected = candidate
@@ -138,5 +184,6 @@ def remove_model(catalog_root: Path, name: str) -> None:
             path=first.path,
             context_window=first.context_window,
             is_default=True,
+            status=first.status,
         )
     _save_manifest(catalog_root, {"models": [_model_to_dict(model) for model in models]})
