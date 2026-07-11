@@ -19,6 +19,7 @@ import palette
 import paths
 import queue_store
 import runner
+from anthropic_runner import AnthropicRunner, AnthropicRuntimeError
 from cli import LaunchSpec, LaunchSpecError, parse_command_line
 from dashboard_callback import DashboardCallback
 from fixtures import dry_run_events
@@ -33,6 +34,7 @@ from models import (
     PromptRoutingPolicy,
     RunStatus,
 )
+from openai_runner import OpenAIRunner, OpenAIRuntimeError
 from screens.confirm_screen import ConfirmScreen
 from screens.dashboard_screen import DashboardScreen
 from screens.help_screen import HelpScreen
@@ -158,6 +160,8 @@ class AutumnApp(App):
         model_catalog_root: Path | None = None,
         local_model_runner: LocalModelRunner | None = None,
         groq_runner: GroqRunner | None = None,
+        anthropic_runner: AnthropicRunner | None = None,
+        openai_runner: OpenAIRunner | None = None,
         is_model_runtime_available: model_router.RuntimeAvailability | None = None,
         prompt_routing_policy: PromptRoutingPolicy | None = None,
         model_download_fn: model_downloader.DownloadFile | None = None,
@@ -197,6 +201,17 @@ class AutumnApp(App):
         # `groq_policy.build_policy`'s catalog gating, only happens when the
         # key is already set.
         self._groq_runner = groq_runner
+        # Same lazy-default reasoning as `_groq_runner` above: `AnthropicRunner()`/
+        # `OpenAIRunner()`'s real client construction reads
+        # `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` (via `credentials.resolve_key`)
+        # only when actually needed, so these stay `None` here and are only
+        # constructed lazily in `_run_provider_reply`, at the point an
+        # Anthropic/OpenAI choice is actually reached -- which, per
+        # `anthropic_policy.build_policy`/`openai_policy.build_policy`'s
+        # catalog gating, only happens when the corresponding key is already
+        # set.
+        self._anthropic_runner = anthropic_runner
+        self._openai_runner = openai_runner
         # The `threading.Event` for whichever Groq stream is currently
         # in-flight, if any -- created fresh per generation in
         # `_run_groq_stream` and cleared back to None once that generation
@@ -613,6 +628,57 @@ class AutumnApp(App):
             finalize_success=lambda message: setattr(message, "text", message.text.strip()),
         )
 
+    def _run_provider_reply(
+        self,
+        *,
+        choice: ModelChoice,
+        snapshot: list[ChatMessage],
+        insert_after: ChatMessage | None,
+        on_complete: Callable[[], None] | None,
+    ) -> None:
+        """Runs on `_answer_prompt_async`'s background thread for an
+        Anthropic or OpenAI choice: a single blocking `generate()` call (no
+        streaming -- see `anthropic_runner.py`/`openai_runner.py`'s module
+        docstrings, and docs/prd/multi-provider-models.md "Future work"
+        #21), producing the whole reply before it's placed into
+        `self.chat_messages` at all.
+
+        Unlike `_run_groq_stream`/`_run_local_stream` (both of which keep
+        whatever text already streamed in on a mid-stream error -- see
+        `_run_stream_reply`), there is no partial output to preserve here:
+        a `generate()` call either returns a complete reply or raises before
+        returning anything. On a runtime error, this discards the failed
+        provider `choice` and regenerates a whole new offline-tiny reply,
+        exactly like the catch-all `elif choice.backend == "provider"`
+        branch in `_answer_prompt_async` already does for provider stubs
+        that have no runner at all."""
+        if choice.provider == "anthropic":
+            runner_obj: AnthropicRunner | OpenAIRunner = self._anthropic_runner or AnthropicRunner()
+            error_type: type[Exception] = AnthropicRuntimeError
+        else:
+            runner_obj = self._openai_runner or OpenAIRunner()
+            error_type = OpenAIRuntimeError
+
+        try:
+            message = runner_obj.generate(snapshot, choice.name)
+        except error_type as exc:
+            fallback_choice = ModelChoice(
+                name=local_llm.OFFLINE_TINY_MODEL,
+                backend="builtin",
+                path=None,
+                reason=f"provider {choice.name} failed: {exc}",
+            )
+            message = local_llm.generate_response(snapshot, fallback_choice)
+            choice = fallback_choice
+
+        self.call_from_thread(
+            self._append_assistant_reply,
+            message,
+            choice,
+            insert_after=insert_after,
+            on_complete=on_complete,
+        )
+
     def _answer_prompt_async(
         self,
         *,
@@ -638,6 +704,14 @@ class AutumnApp(App):
                 return
             elif choice.backend == "provider" and choice.provider == "groq":
                 self._run_groq_stream(
+                    choice=choice,
+                    snapshot=snapshot,
+                    insert_after=insert_after,
+                    on_complete=on_complete,
+                )
+                return
+            elif choice.backend == "provider" and choice.provider in ("anthropic", "openai"):
+                self._run_provider_reply(
                     choice=choice,
                     snapshot=snapshot,
                     insert_after=insert_after,
