@@ -31,7 +31,8 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-import credentials, groq_policy, local_models, paths, registry
+import anthropic_policy, credentials, groq_policy, local_models, openai_policy, paths, registry
+from models import PromptRoutingPolicy
 
 _GEPA_PREFIX = "gepa "
 
@@ -296,6 +297,23 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_prompt_routing_policy() -> PromptRoutingPolicy:
+    """Combines every real (non-stub) provider's policy into the single
+    `PromptRoutingPolicy` `catalog.build_entries` accepts: Groq (#13),
+    Anthropic and OpenAI (#21) each contribute their own `ProviderAccount`
+    and `ProviderModel`s via their own `build_policy()`, gated independently
+    on their own env var/stored key (see `groq_policy.py`,
+    `anthropic_policy.py`, `openai_policy.py`). Plain list concatenation is
+    enough -- no dedup needed, since every model is already namespaced by
+    its `provider` field, so entries from different providers' policies can
+    never collide."""
+    policies = [groq_policy.build_policy(), anthropic_policy.build_policy(), openai_policy.build_policy()]
+    return PromptRoutingPolicy(
+        provider_accounts=[account for policy in policies for account in policy.provider_accounts],
+        provider_models=[model for policy in policies for model in policy.provider_models],
+    )
+
+
 def _run(args: argparse.Namespace) -> int:
     try:
         specs = build_launch_specs(args)
@@ -316,7 +334,7 @@ def _run(args: argparse.Namespace) -> int:
         dry_run=spec.dry_run,
         initial_queue=specs[1:],
         queue_sessions_root=paths.sessions_root(),
-        prompt_routing_policy=groq_policy.build_policy(),
+        prompt_routing_policy=_build_prompt_routing_policy(),
     )
     app.run()
     return 0
@@ -328,7 +346,7 @@ def _browse(args: argparse.Namespace) -> int:
     app = AutumnApp(
         runs_root=paths.default_runs_root(),
         queue_sessions_root=paths.sessions_root(),
-        prompt_routing_policy=groq_policy.build_policy(),
+        prompt_routing_policy=_build_prompt_routing_policy(),
     )
     app.run()
     return 0
