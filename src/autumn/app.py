@@ -2,6 +2,7 @@
 
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -103,6 +104,26 @@ def _model_status_for_reply(message: ChatMessage, choice: ModelChoice) -> str:
     return _model_status_from_choice(choice)
 
 
+def _append_stream_marker(text: str, marker: str) -> str:
+    """Appends a stream-interruption marker (e.g. `"[stopped]"` or
+    `"[interrupted: ...]"`) to whatever partial text streamed in so far --
+    with a leading space when there's prior text, or standing alone (no
+    leading space) when nothing streamed in before the interruption."""
+    return f"{text} {marker}" if text else marker
+
+
+# How often (in seconds, wall-clock) a streaming Groq reply is allowed to
+# trigger a `call_from_thread` chat refresh. Streaming re-renders the whole
+# transcript per refresh_chat call (see ChatView.refresh_from_messages), so
+# firing one on every token would flood the Textual event loop -- this
+# throttles that down to a UI-perceptible cadence. The in-progress message's
+# `.text` itself is still updated on every chunk regardless of this throttle;
+# only the on-screen refresh is rate-limited, and a final refresh always
+# happens when the stream ends (success, cancel, or error) regardless of how
+# recently the last one fired.
+_STREAM_REFRESH_INTERVAL_SECONDS = 0.1
+
+
 # How often to check whether this process's own live run has left RUNNING, so
 # the next queued command bar item (if any) can auto-start. Coarser than a
 # rendering concern -- reuses the same lightweight-timer-poll idiom
@@ -177,6 +198,14 @@ class AutumnApp(App):
         # `groq_policy.build_policy`'s catalog gating, only happens when the
         # key is already set.
         self._groq_runner = groq_runner
+        # The `threading.Event` for whichever Groq stream is currently
+        # in-flight, if any -- created fresh per generation in
+        # `_run_groq_stream` and cleared back to None once that generation
+        # finishes (success, cancel, or error). `cancel_active_generation`
+        # (wired to DashboardScreen's escape binding) sets it if present;
+        # guarded clearing (see `_run_groq_stream`) means a late callback from
+        # an already-finished generation never clobbers a newer one's event.
+        self._active_cancel_event: threading.Event | None = None
         self._is_model_runtime_available = is_model_runtime_available
         self._prompt_routing_policy = prompt_routing_policy
         # None means "use model_downloader's real Hugging Face download";
@@ -382,14 +411,21 @@ class AutumnApp(App):
             self._dashboard_screen.refresh_chat(self.chat_messages, self._chat_model_status)
         return message
 
-    def _append_assistant_reply(
+    def _insert_assistant_message(
         self,
         message: ChatMessage,
-        choice: ModelChoice,
         *,
         insert_after: ChatMessage | None = None,
-        on_complete: Callable[[], None] | None = None,
     ) -> None:
+        """Places `message` into `self.chat_messages` at the position a
+        finished reply to the prompt it's answering would occupy: appended at
+        the end normally, or immediately after `insert_after` when a prompt
+        was answered out of submission order (queued replies -- see
+        `test_live_run_queues_prompt_replies_in_order_without_duplicate_users`).
+        Split out of `_append_assistant_reply` so a streaming reply's
+        still-empty placeholder message can be inserted at the right spot
+        immediately, before any text has streamed in, then have that same
+        object's `.text` mutated in place as chunks arrive."""
         if insert_after is None:
             self.chat_messages.append(message)
         else:
@@ -402,12 +438,111 @@ class AutumnApp(App):
                 len(self.chat_messages),
             )
             self.chat_messages.insert(insert_at, message)
-        self._chat_model_status = _model_status_for_reply(message, choice)
-        self._persist_chat()
+
+    def _refresh_chat_display(self) -> None:
         if hasattr(self, "_dashboard_screen"):
             self._dashboard_screen.refresh_chat(self.chat_messages, self._chat_model_status)
+
+    def _finalize_assistant_reply(
+        self,
+        message: ChatMessage,
+        choice: ModelChoice,
+        *,
+        on_complete: Callable[[], None] | None = None,
+    ) -> None:
+        """Whatever a *finished* assistant reply needs beyond already being
+        present in `self.chat_messages`: status line, persistence, a final
+        chat refresh, and the queue's on_complete hook. Does not insert --
+        callers that haven't already inserted `message` should use
+        `_append_assistant_reply` instead."""
+        self._chat_model_status = _model_status_for_reply(message, choice)
+        self._persist_chat()
+        self._refresh_chat_display()
         if on_complete is not None:
             on_complete()
+
+    def _append_assistant_reply(
+        self,
+        message: ChatMessage,
+        choice: ModelChoice,
+        *,
+        insert_after: ChatMessage | None = None,
+        on_complete: Callable[[], None] | None = None,
+    ) -> None:
+        self._insert_assistant_message(message, insert_after=insert_after)
+        self._finalize_assistant_reply(message, choice, on_complete=on_complete)
+
+    def cancel_active_generation(self) -> None:
+        """Wired to DashboardScreen's escape binding: stops whatever Groq
+        stream is currently in-flight, if any, keeping the partial text
+        that's already streamed in (see `_run_groq_stream`). No-op if nothing
+        is currently streaming."""
+        if self._active_cancel_event is not None:
+            self._active_cancel_event.set()
+
+    def _run_groq_stream(
+        self,
+        *,
+        choice: ModelChoice,
+        snapshot: list[ChatMessage],
+        insert_after: ChatMessage | None,
+        on_complete: Callable[[], None] | None,
+    ) -> None:
+        """Runs on `_answer_prompt_async`'s background thread for a Groq
+        choice: streams the reply token-by-token into a placeholder
+        `ChatMessage` already sitting in `self.chat_messages`, throttling UI
+        refreshes, and handles cancellation/mid-stream errors by keeping
+        whatever text already arrived rather than discarding it (unlike the
+        local-model/offline-tiny fallback paths -- see module docstring /
+        PRD "Error handling mid-stream")."""
+        groq_runner = self._groq_runner or GroqRunner()
+        message = ChatMessage(role="assistant", text="", model=choice.name)
+        cancel_event = threading.Event()
+        self._active_cancel_event = cancel_event
+
+        self.call_from_thread(self._insert_assistant_message, message, insert_after=insert_after)
+        self.call_from_thread(self._refresh_chat_display)
+
+        last_refresh = time.monotonic()
+
+        def on_chunk(text: str) -> None:
+            nonlocal last_refresh
+            message.text += text
+            now = time.monotonic()
+            if now - last_refresh >= _STREAM_REFRESH_INTERVAL_SECONDS:
+                last_refresh = now
+                self.call_from_thread(self._refresh_chat_display)
+
+        error: GroqRuntimeError | None = None
+        try:
+            groq_runner.generate_stream(
+                snapshot, choice.name, on_chunk=on_chunk, cancel_event=cancel_event
+            )
+        except GroqRuntimeError as exc:
+            error = exc
+
+        # Guard clearing: only clear if this is still the event this
+        # generation set -- a later generation could already have replaced it
+        # by the time this callback runs.
+        if self._active_cancel_event is cancel_event:
+            self._active_cancel_event = None
+
+        if error is not None:
+            message.text = _append_stream_marker(message.text, f"[interrupted: {error}]")
+        elif cancel_event.is_set():
+            message.text = _append_stream_marker(message.text, "[stopped]")
+
+        # `choice` is untouched here even on cancel/error -- deliberately
+        # different from the local/offline-tiny fallback paths below, which
+        # discard the failed choice and regenerate a whole new offline-tiny
+        # reply. Throwing away real partial output the user already saw would
+        # be worse than a status line that still says "Model: <groq model>".
+        self.call_from_thread(
+            self._finalize_assistant_reply,
+            message,
+            choice,
+            on_complete=on_complete,
+        )
 
     def _answer_prompt_async(
         self,
@@ -445,17 +580,13 @@ class AutumnApp(App):
                     )
                     message = local_llm.generate_response(snapshot, choice)
             elif choice.backend == "provider" and choice.provider == "groq":
-                groq_runner = self._groq_runner or GroqRunner()
-                try:
-                    message = groq_runner.generate(snapshot, choice.name)
-                except GroqRuntimeError as exc:
-                    choice = ModelChoice(
-                        name=local_llm.OFFLINE_TINY_MODEL,
-                        backend="builtin",
-                        path=None,
-                        reason=str(exc),
-                    )
-                    message = local_llm.generate_response(snapshot, choice)
+                self._run_groq_stream(
+                    choice=choice,
+                    snapshot=snapshot,
+                    insert_after=insert_after,
+                    on_complete=on_complete,
+                )
+                return
             elif choice.backend == "provider":
                 choice = ModelChoice(
                     name=local_llm.OFFLINE_TINY_MODEL,

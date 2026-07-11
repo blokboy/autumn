@@ -7,7 +7,6 @@ from textual.widgets import Input
 
 from autumn import groq_policy, local_models
 from autumn.app import AutumnApp
-from autumn.groq_runner import GroqRuntimeError
 from autumn.local_model_runner import LocalModelRuntimeError
 from autumn.models import (
     ChatMessage,
@@ -338,10 +337,11 @@ def _groq_policy_with_default(model_name: str = "llama-3.3-70b-versatile") -> Pr
 
 async def test_prompt_receives_async_groq_reply(tmp_path):
     class FakeGroqRunner:
-        def generate(self, messages: list[ChatMessage], model_name: str) -> ChatMessage:
+        def generate_stream(self, messages, model_name, *, on_chunk, cancel_event=None):
             assert messages == [ChatMessage(role="user", text="hello")]
             assert model_name == "llama-3.3-70b-versatile"
-            return ChatMessage(role="assistant", text="Hi from Groq.", model=model_name)
+            for chunk in ["Hi ", "from ", "Groq."]:
+                on_chunk(chunk)
 
     app = AutumnApp(
         runs_root=tmp_path,
@@ -372,48 +372,8 @@ async def test_prompt_receives_async_groq_reply(tmp_path):
         ]
         status_text = app.screen.query_one("#chat-model-status", Static).content
         assert "Model: llama-3.3-70b-versatile (provider available)" in str(status_text)
-
-
-async def test_prompt_falls_back_when_groq_runtime_fails(tmp_path):
-    class FailingGroqRunner:
-        def generate(self, messages: list[ChatMessage], model_name: str) -> ChatMessage:
-            raise GroqRuntimeError(f"{model_name} failed: connection error")
-
-    app = AutumnApp(
-        runs_root=tmp_path,
-        chat_sessions_root=tmp_path / "chats",
-        model_catalog_root=tmp_path / "models",
-        groq_runner=FailingGroqRunner(),
-        prompt_routing_policy=_groq_policy_with_default(),
-    )
-
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        await pilot.press("escape")
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-
-        await pilot.press(":")
-        await pilot.pause()
-        app.screen.query_one(CommandBar).query_one(Input).insert_text_at_cursor("hello")
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause(0.2)
-
-        assert app.chat_messages == [
-            ChatMessage(role="user", text="hello"),
-            ChatMessage(
-                role="assistant",
-                text="Offline local response: hello",
-                model="autumn/offline-tiny",
-            ),
-        ]
-        status_text = app.screen.query_one("#chat-model-status", Static).content
-        assert (
-            "Fallback: autumn/offline-tiny (llama-3.3-70b-versatile failed: connection error)"
-            in str(status_text)
-        )
+        chat_text = app.screen.query_one("#chat-transcript", Static).content
+        assert "Autumn [llama-3.3-70b-versatile]: Hi from Groq." in str(chat_text)
 
 
 async def test_prompt_falls_through_when_groq_key_absent(tmp_path, monkeypatch):

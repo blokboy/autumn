@@ -64,6 +64,12 @@ class DashboardScreen(Screen):
     BINDINGS = [
         Binding(":", "focus_command_bar", "Command", show=True),
         Binding("d", "set_default_model", "Set default model", show=True),
+        # Unused at this screen level (see module docstring for the
+        # tab widgets escape does NOT touch) -- cancels whatever Groq
+        # stream is currently in-flight, if any (see
+        # AutumnApp.cancel_active_generation). A no-op when nothing is
+        # streaming.
+        Binding("escape", "cancel_active_generation", "Cancel reply", show=True),
     ]
 
     def __init__(
@@ -137,6 +143,9 @@ class DashboardScreen(Screen):
             return
         self.app.set_default_model(selected.group, selected.name)
         self.refresh_models()
+
+    def action_cancel_active_generation(self) -> None:
+        self.app.cancel_active_generation()
 
     def _catalog_entries(self) -> list[CatalogEntry]:
         if self._model_catalog_root is None:
