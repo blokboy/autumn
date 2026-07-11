@@ -8,22 +8,26 @@ from typing import Any, Callable, Protocol
 import groq
 
 import credentials
+import list_keys
+import list_models
+import list_runs
+import paths
 import search_docs
 from models import ChatMessage
 
 GROQ_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it")
 
 # Tools offered to Groq on every chat turn (see docs/prd/chat-search-tools.md,
-# "Tool-call round"). `search_docs` is always offered -- it's local, free, and
-# has no key/opt-in gate. This is the only tool this ticket wires up; later
-# tools (search_web, system tools) extend this list.
-_TOOLS: list[dict[str, Any]] = [search_docs.TOOL_SCHEMA]
-
-# name -> callable executing that tool's arguments and returning the result
-# text to hand back to Groq as a tool-role message.
-_TOOL_EXECUTORS: dict[str, Callable[[dict[str, Any], Path | None], str]] = {
-    search_docs.TOOL_NAME: lambda arguments, docs_root: search_docs.run_tool(arguments, root=docs_root),
-}
+# "Tool-call round", and docs/prd/chat-cli-parity-tools.md's read-only tools
+# row). All four are read-only and require no confirmation -- they're always
+# offered, with no key/opt-in gate. Mutating tools (a later ticket) will need
+# their own gating, so don't just append to this list for those.
+_TOOLS: list[dict[str, Any]] = [
+    search_docs.TOOL_SCHEMA,
+    list_models.TOOL_SCHEMA,
+    list_keys.TOOL_SCHEMA,
+    list_runs.TOOL_SCHEMA,
+]
 
 
 class GroqRuntimeError(RuntimeError):
@@ -65,13 +69,42 @@ class GroqRunner:
     as a single blocking response (`generate`) or token-by-token
     (`generate_stream`)."""
 
-    def __init__(self, *, client: GroqClient | None = None, docs_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        client: GroqClient | None = None,
+        docs_root: Path | None = None,
+        catalog_root: Path | None = None,
+        runs_root: Path | None = None,
+    ) -> None:
         self._client = (
             client if client is not None else groq.Groq(api_key=credentials.resolve_key("groq", "GROQ_API_KEY"))
         )
         # Override point for tests; `None` means `search_docs` resolves the
         # real repo root itself (see search_docs._repo_root).
         self._docs_root = docs_root
+        # Unlike `docs_root`, `list_models`/`list_runs` have no self-resolving
+        # fallback of their own (`local_models.list_models`/`registry.scan`
+        # always take a concrete root) -- so the real default is resolved
+        # here, once, rather than threaded through as `None` on every call.
+        self._catalog_root = catalog_root if catalog_root is not None else paths.models_root()
+        self._runs_root = runs_root if runs_root is not None else paths.default_runs_root()
+
+        # name -> callable executing that tool's arguments and returning the
+        # result text to hand back to Groq as a tool-role message. Built here
+        # (not module-level) so each executor closes over exactly the context
+        # it needs -- e.g. `list_models`'s `catalog_root` -- rather than every
+        # tool executor sharing one fixed extra-parameter signature. Later
+        # tools (mutating system tools, web search) extend this dict the same
+        # way.
+        self._tool_executors: dict[str, Callable[[dict[str, Any]], str]] = {
+            search_docs.TOOL_NAME: lambda arguments: search_docs.run_tool(arguments, root=self._docs_root),
+            list_models.TOOL_NAME: lambda arguments: list_models.run_tool(
+                arguments, catalog_root=self._catalog_root
+            ),
+            list_keys.TOOL_NAME: list_keys.run_tool,
+            list_runs.TOOL_NAME: lambda arguments: list_runs.run_tool(arguments, runs_root=self._runs_root),
+        }
 
     def generate(self, messages: list[ChatMessage], model_name: str) -> ChatMessage:
         payload = _to_payload(messages)
@@ -98,8 +131,9 @@ class GroqRunner:
         Runs the single-round tool-calling mechanism from
         docs/prd/chat-search-tools.md ("Tool-call round") ahead of streaming:
 
-        1. A non-streaming "decide" call is sent with `search_docs`'s schema
-           in `tools`.
+        1. A non-streaming "decide" call is sent with every read-only tool's
+           schema (`_TOOLS`: `search_docs`, `list_models`, `list_keys`,
+           `list_runs`) in `tools`.
         2. If that response has no `tool_calls`, its text is already the
            final answer -- it's handed to `on_chunk` in one piece (no
            further streaming needed) and this returns.
@@ -189,13 +223,13 @@ class GroqRunner:
             result_text = f"Error: could not parse arguments for {name}: {exc}"
             failure_notice = f"[{name} failed: invalid arguments]\n\n"
         else:
-            executor = _TOOL_EXECUTORS.get(name)
+            executor = self._tool_executors.get(name)
             if executor is None:
                 result_text = f"Error: unknown tool {name!r}"
                 failure_notice = f"[{name} failed: unknown tool]\n\n"
             else:
                 try:
-                    result_text = executor(arguments, self._docs_root)
+                    result_text = executor(arguments)
                 except Exception as exc:
                     result_text = f"Error: {name} failed: {exc}"
                     failure_notice = f"[{name} failed: {exc}]\n\n"

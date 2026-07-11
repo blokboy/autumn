@@ -568,7 +568,9 @@ class AutumnApp(App):
         choice: streams the reply token-by-token into a placeholder
         `ChatMessage` already sitting in `self.chat_messages` via
         `_run_stream_reply`."""
-        groq_runner = self._groq_runner or GroqRunner()
+        groq_runner = self._groq_runner or GroqRunner(
+            catalog_root=self._model_catalog_root, runs_root=self.runs_root
+        )
         self._run_stream_reply(
             choice=choice,
             insert_after=insert_after,
