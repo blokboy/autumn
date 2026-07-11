@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 import chat_store
-from models import ChatMessage
+from models import ChatMessage, ToolCitation
 
 
 def _dead_pid() -> int:
@@ -77,6 +77,27 @@ def test_load_chat_roundtrips_participant_metadata(tmp_path):
     assert chat_store.load_chat(path) == messages
 
 
+def test_load_chat_roundtrips_a_tool_citation(tmp_path):
+    path = tmp_path / "session.json"
+    messages = [
+        ChatMessage(role="user", text="what does --dry-run do"),
+        ChatMessage(
+            role="assistant",
+            text="It replays scripted events.",
+            model="llama-3.3-70b-versatile",
+            citation=ToolCitation(tool="search_docs", sources=["README.md — Usage"]),
+        ),
+    ]
+    chat_store.persist_chat(path, messages, pid=os.getpid())
+
+    payload = json.loads(path.read_text())
+    assert payload["messages"][1]["citation"] == {
+        "tool": "search_docs",
+        "sources": ["README.md — Usage"],
+    }
+    assert chat_store.load_chat(path) == messages
+
+
 def test_load_chat_keeps_older_records_without_participant_metadata(tmp_path):
     path = tmp_path / "session.json"
     path.write_text(
@@ -94,6 +115,26 @@ def test_load_chat_keeps_older_records_without_participant_metadata(tmp_path):
     assert chat_store.load_chat(path) == [
         ChatMessage(role="user", text="hello"),
         ChatMessage(role="assistant", text="hi", model="local/tiny"),
+    ]
+
+
+def test_load_chat_drops_citation_but_keeps_message_when_citation_is_malformed(tmp_path):
+    path = tmp_path / "session.json"
+    path.write_text(
+        json.dumps(
+            {
+                "pid": 1,
+                "messages": [
+                    {"role": "assistant", "text": "keep me", "citation": {"tool": "search_docs"}},
+                    {"role": "assistant", "text": "keep me too", "citation": "not a dict"},
+                ],
+            }
+        )
+    )
+
+    assert chat_store.load_chat(path) == [
+        ChatMessage(role="assistant", text="keep me", citation=None),
+        ChatMessage(role="assistant", text="keep me too", citation=None),
     ]
 
 

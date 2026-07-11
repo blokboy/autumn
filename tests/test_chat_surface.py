@@ -709,7 +709,9 @@ def _groq_policy_with_default(model_name: str = "llama-3.3-70b-versatile") -> Pr
 
 async def test_prompt_receives_async_groq_reply(tmp_path):
     class FakeGroqRunner:
-        def generate_stream(self, messages, model_name, *, on_chunk, cancel_event=None):
+        def generate_stream(
+            self, messages, model_name, *, on_chunk, cancel_event=None, on_status=None, on_citation=None
+        ):
             assert messages == [ChatMessage(role="user", text="hello")]
             assert model_name == "llama-3.3-70b-versatile"
             for chunk in ["Hi ", "from ", "Groq."]:

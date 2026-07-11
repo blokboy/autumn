@@ -5,7 +5,7 @@ import os
 import uuid
 from pathlib import Path
 
-from models import ChatMessage
+from models import ChatMessage, ToolCitation
 from procutil import pid_alive
 
 
@@ -23,7 +23,28 @@ def _message_to_dict(message: ChatMessage) -> dict:
         raw["model"] = message.model
     if message.participant_name is not None:
         raw["participant_name"] = message.participant_name
+    if message.citation is not None:
+        raw["citation"] = {"tool": message.citation.tool, "sources": list(message.citation.sources)}
     return raw
+
+
+def _citation_from_raw(raw: object) -> ToolCitation | None:
+    """Parses a persisted `citation` field. Returns `None` for a missing
+    citation (the common case) and also -- same as the rest of this
+    module's `_message_from_dict` -- for one that's malformed, rather than
+    raising; a bad citation shouldn't drop the whole message it's attached
+    to, so callers fall back to no citation instead of no message."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    tool = raw.get("tool")
+    sources = raw.get("sources")
+    if not isinstance(tool, str) or not isinstance(sources, list):
+        return None
+    if not all(isinstance(source, str) for source in sources):
+        return None
+    return ToolCitation(tool=tool, sources=sources)
 
 
 def _message_from_dict(raw: object) -> ChatMessage | None:
@@ -43,11 +64,13 @@ def _message_from_dict(raw: object) -> ChatMessage | None:
         not isinstance(participant_name, str) or not participant_name
     ):
         return None
+    citation = _citation_from_raw(raw.get("citation"))
     return ChatMessage(
         role=role,
         text=text,
         model=model,
         participant_name=participant_name,
+        citation=citation,
     )
 
 

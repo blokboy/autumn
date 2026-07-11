@@ -3,7 +3,7 @@ docs/**/*.md, README.md, AGENTS.md."""
 
 import pytest
 
-from search_docs import SearchDocsError, format_results, search_docs
+from search_docs import SearchDocsError, citation_labels, citations_for_tool_call, format_results, search_docs
 
 
 def _write_corpus(root):
@@ -121,3 +121,36 @@ def test_format_results_reports_no_matches_without_raising(tmp_path):
     results = search_docs("quantum entanglement submarine", root=tmp_path)
 
     assert format_results(results) == "No matching documentation found."
+
+
+def test_citation_labels_include_path_and_heading(tmp_path):
+    _write_corpus(tmp_path)
+
+    results = search_docs("what does --dry-run do", root=tmp_path)
+
+    assert citation_labels(results) == ["README.md — Usage"]
+
+
+def test_citation_labels_omit_heading_for_a_headingless_chunk(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "README.md").write_text("Some preamble text about --dry-run mentions no heading at all.\n")
+
+    results = search_docs("dry-run", root=tmp_path)
+
+    assert citation_labels(results) == ["README.md"]
+
+
+def test_citation_labels_empty_for_no_matches(tmp_path):
+    _write_corpus(tmp_path)
+
+    results = search_docs("quantum entanglement submarine", root=tmp_path)
+
+    assert citation_labels(results) == []
+
+
+def test_citations_for_tool_call_matches_run_tool_query_parsing(tmp_path):
+    _write_corpus(tmp_path)
+
+    assert citations_for_tool_call({"query": "what does --dry-run do"}, root=tmp_path) == ["README.md — Usage"]
+    # Same non-string-query coercion `run_tool` applies.
+    assert citations_for_tool_call({"query": 123}, root=tmp_path) == []

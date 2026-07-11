@@ -221,12 +221,51 @@ def format_results(results: list[SearchResult]) -> str:
     return "\n\n".join(sections)
 
 
+def _coerce_query(arguments: dict[str, Any]) -> str:
+    query = arguments.get("query", "")
+    if not isinstance(query, str):
+        query = json.dumps(query)
+    return query
+
+
 def run_tool(arguments: dict[str, Any], *, root: Path | None = None) -> str:
     """Entry point `GroqRunner` calls to execute a `search_docs` tool call:
     parses the `query` argument and returns the formatted result text.
     Propagates `SearchDocsError` on an unreadable corpus."""
-    query = arguments.get("query", "")
-    if not isinstance(query, str):
-        query = json.dumps(query)
-    results = search_docs(query, root=root)
+    results = search_docs(_coerce_query(arguments), root=root)
     return format_results(results)
+
+
+def citation_labels(results: list[SearchResult]) -> list[str]:
+    """Human-readable "<path> — <heading>" (or bare "<path>" for a
+    headingless chunk) source labels for `results`, in the same rank order
+    `search_docs` returned them -- the structured citation counterpart to
+    `format_results`'s plain-text rendering fed to the model, kept in sync
+    with it by sharing the same label-building logic rather than
+    re-deriving it independently."""
+    labels = []
+    for result in results:
+        label = result.chunk.path
+        if result.chunk.heading:
+            label = f"{label} — {result.chunk.heading}"
+        labels.append(label)
+    return labels
+
+
+def citations_for_tool_call(arguments: dict[str, Any], *, root: Path | None = None) -> list[str]:
+    """Citation-source labels for a `search_docs` tool call's arguments --
+    used by `GroqRunner` to attach source attribution to the eventual
+    assistant reply once the tool call succeeds (see
+    docs/prd/chat-search-tools.md, "Tool-call round" and `ToolCitation` in
+    models.py).
+
+    Deliberately a separate call from `run_tool` (re-running the same cheap
+    BM25 search -- see module docstring on why rebuilding the index per call
+    is fine for this corpus) rather than changing `run_tool`'s return shape:
+    `run_tool` stays a single plain-text-in, plain-text-out entry point so
+    it keeps being easy to swap out as a single unit (e.g. in tests that
+    monkeypatch it to simulate a tool failure) independent of citation
+    plumbing.
+    """
+    results = search_docs(_coerce_query(arguments), root=root)
+    return citation_labels(results)
