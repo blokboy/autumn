@@ -1,7 +1,7 @@
 """Tests for prompt model routing policy."""
 
-from autumn import model_router
-from autumn.models import LocalModel, PromptRoutingPolicy, ProviderAccount, ProviderModel
+import model_router
+from models import LocalModel, PromptRoutingPolicy, ProviderAccount, ProviderModel
 
 
 def test_router_uses_builtin_offline_model_when_no_catalog_default_exists(tmp_path):

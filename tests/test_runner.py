@@ -2,8 +2,8 @@ import json
 import time
 from pathlib import Path
 
-from autumn.models import LiveRunSpec
-from autumn.runner import launch, recover_launch_spec
+from models import LiveRunSpec
+from runner import launch, recover_launch_spec
 
 
 def _write_meta(run_dir: Path, meta: dict) -> None:

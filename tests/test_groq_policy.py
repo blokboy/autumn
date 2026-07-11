@@ -1,6 +1,6 @@
 """Tests for the Groq catalog-visibility policy (gated on GROQ_API_KEY)."""
 
-from autumn import catalog, credentials, groq_policy
+import catalog, credentials, groq_policy
 
 
 def test_build_policy_signs_in_when_groq_api_key_is_set(monkeypatch, tmp_path):

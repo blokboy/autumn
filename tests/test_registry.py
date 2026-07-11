@@ -5,8 +5,8 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from autumn.models import DashboardState, RunStatus, RunSummary
-from autumn.registry import infer_status, load_dashboard_state, merge_live, scan
+from models import DashboardState, RunStatus, RunSummary
+from registry import infer_status, load_dashboard_state, merge_live, scan
 
 
 def _dead_pid() -> int:

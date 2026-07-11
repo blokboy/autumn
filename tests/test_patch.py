@@ -7,9 +7,9 @@ import pytest
 from gepa.core.engine import GEPAEngine
 from gepa.optimize_anything import EngineConfig, GEPAConfig
 
-from autumn import patch
-from autumn.dashboard_callback import DashboardCallback
-from autumn.models import DashboardState
+import patch
+from dashboard_callback import DashboardCallback
+from models import DashboardState
 
 
 def _make_dashboard(run_dir: Path) -> DashboardCallback:

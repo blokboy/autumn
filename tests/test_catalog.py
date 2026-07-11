@@ -1,7 +1,7 @@
 """Tests for the unified model catalog (local models + provider entries)."""
 
-from autumn import catalog, local_models
-from autumn.models import LocalModel, PromptRoutingPolicy, ProviderAccount, ProviderModel
+import catalog, local_models
+from models import LocalModel, PromptRoutingPolicy, ProviderAccount, ProviderModel
 
 
 def test_build_entries_is_empty_when_catalog_root_has_no_models(tmp_path):

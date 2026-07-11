@@ -2,8 +2,8 @@
 
 import json
 
-from autumn import local_models
-from autumn.models import LocalModel
+import local_models
+from models import LocalModel
 
 
 def test_install_model_copies_file_and_records_metadata(tmp_path):

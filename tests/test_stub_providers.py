@@ -1,7 +1,7 @@
 """Tests for the always-visible, never-eligible Anthropic/OpenAI stub catalog
 rows (#15)."""
 
-from autumn import stub_providers
+import stub_providers
 
 
 def test_disabled_provider_entries_covers_anthropic_and_openai_in_order():

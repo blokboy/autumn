@@ -1,5 +1,5 @@
 """Tests for the launch-spec parsing shared between `autumn run` and
-InputScreen's `gepa ...` command (autumn.cli.parse_gepa_command /
+InputScreen's `gepa ...` command (cli.parse_gepa_command /
 build_launch_spec), plus a regression check that `autumn run`/`autumn runs`
 keep behaving exactly as before the InputScreen refactor.
 """
@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from autumn import cli
-from autumn import local_models
-from autumn.cli import LaunchSpecError, parse_gepa_command
+import cli
+import local_models
+from cli import LaunchSpecError, parse_gepa_command
 
 
 def test_parse_gepa_command_valid_minimal(tmp_path):
@@ -195,7 +195,7 @@ def test_models_remove_deletes_installed_model(tmp_path, monkeypatch, capsys):
 
 
 def test_keys_add_stores_a_key(capsys):
-    from autumn import credentials
+    import credentials
 
     result = cli.main(["keys", "add", "groq", "gsk_abc123"])
 
@@ -210,7 +210,7 @@ def test_keys_add_rejects_unknown_provider(capsys):
 
 
 def test_keys_list_shows_configured_and_not_configured(monkeypatch, capsys):
-    from autumn import credentials
+    import credentials
 
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -236,7 +236,7 @@ def test_keys_list_reflects_env_var_without_any_stored_key(monkeypatch, capsys):
 
 
 def test_keys_remove_deletes_a_stored_key(capsys):
-    from autumn import credentials
+    import credentials
 
     credentials.set_key("groq", "gsk_abc123")
 
@@ -255,7 +255,7 @@ def test_keys_remove_reports_when_nothing_was_stored(capsys):
 
 
 def test_keys_remove_does_not_affect_env_var_fallback(monkeypatch, capsys):
-    from autumn import credentials
+    import credentials
 
     monkeypatch.setenv("GROQ_API_KEY", "from-env")
     credentials.set_key("groq", "from-store")

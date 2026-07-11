@@ -1,6 +1,6 @@
 """Tests for local provider API key storage."""
 
-from autumn import credentials
+import credentials
 
 
 def test_set_and_get_key_round_trips():

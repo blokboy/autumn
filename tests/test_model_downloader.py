@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from autumn import local_models, model_downloader
-from autumn.curated_models import CuratedModel
+import local_models, model_downloader
+from curated_models import CuratedModel
 
 _ENTRY = CuratedModel(
     name="Tiny Test Model",

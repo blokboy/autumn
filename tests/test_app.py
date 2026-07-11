@@ -9,9 +9,9 @@ import asyncio
 import json
 from pathlib import Path
 
-from autumn.app import AutumnApp
-from autumn.models import RunStatus
-from autumn.screens.confirm_screen import ConfirmScreen
+from app import AutumnApp
+from models import RunStatus
+from screens.confirm_screen import ConfirmScreen
 
 
 def _write_meta(run_dir: Path, script_path: Path, run_name: str) -> None:

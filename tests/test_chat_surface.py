@@ -5,18 +5,18 @@ import json
 from textual.widgets import Static
 from textual.widgets import Input
 
-from autumn import groq_policy, local_models
-from autumn.app import AutumnApp
-from autumn.local_model_runner import LocalModelRuntimeError
-from autumn.models import (
+import groq_policy, local_models
+from app import AutumnApp
+from local_model_runner import LocalModelRuntimeError
+from models import (
     ChatMessage,
     PromptRoutingPolicy,
     ProviderAccount,
     ProviderModel,
     RunStatus,
 )
-from autumn.screens.dashboard_screen import DashboardScreen
-from autumn.widgets.command_bar import CommandBar
+from screens.dashboard_screen import DashboardScreen
+from widgets.command_bar import CommandBar
 
 
 async def test_non_gepa_landing_prompt_opens_dashboard_chat(tmp_path):

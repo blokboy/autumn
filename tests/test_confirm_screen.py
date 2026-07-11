@@ -4,7 +4,7 @@ test harness (confirm button, cancel button, y/n keys, and escape)."""
 from textual.app import App, ComposeResult
 from textual.widgets import Label
 
-from autumn.screens.confirm_screen import ConfirmScreen
+from screens.confirm_screen import ConfirmScreen
 
 
 class ConfirmHostApp(App):

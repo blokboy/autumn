@@ -4,12 +4,12 @@ from pathlib import Path
 
 from textual.widgets import SelectionList
 
-from autumn import local_models
-from autumn.app import AutumnApp
-from autumn.curated_models import CURATED_MODELS
-from autumn.screens.dashboard_screen import DashboardScreen
-from autumn.screens.input_screen import InputScreen
-from autumn.screens.model_picker_screen import ModelPickerScreen
+import local_models
+from app import AutumnApp
+from curated_models import CURATED_MODELS
+from screens.dashboard_screen import DashboardScreen
+from screens.input_screen import InputScreen
+from screens.model_picker_screen import ModelPickerScreen
 
 
 def _fake_download_file(url: str, destination: Path, on_progress) -> None:

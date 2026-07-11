@@ -17,11 +17,11 @@ import asyncio
 
 from textual.widgets import Input
 
-from autumn.app import AutumnApp
-from autumn.models import ChatMessage, RunStatus
-from autumn.screens.dashboard_screen import DashboardScreen
-from autumn.screens.help_screen import HelpScreen
-from autumn.widgets.command_bar import CommandBar
+from app import AutumnApp
+from models import ChatMessage, RunStatus
+from screens.dashboard_screen import DashboardScreen
+from screens.help_screen import HelpScreen
+from widgets.command_bar import CommandBar
 
 
 def _write_sleepy_script(path, seconds: float) -> None:

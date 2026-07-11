@@ -8,5 +8,5 @@ dist/
 
 # Raw third-party pixel-art asset pack (source of the deer landing-page
 # sprite): unlicensed for redistribution and not needed at runtime -- the
-# animation frames actually used are baked into src/autumn/widgets/_deer_frames.py.
-src/autumn/assets/
+# animation frames actually used are baked into src/widgets/_deer_frames.py.
+src/assets/

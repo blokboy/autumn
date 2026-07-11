@@ -9,8 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from autumn import queue_store
-from autumn.cli import LaunchSpec
+import queue_store
+from cli import LaunchSpec
 
 
 def _dead_pid() -> int:

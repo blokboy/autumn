@@ -2,7 +2,7 @@
 
 import pytest
 
-from autumn import local_models, paths
+import local_models, paths
 
 
 @pytest.fixture(autouse=True)

@@ -4,8 +4,8 @@ mark_script_finished, and the multi-objective detection heuristic."""
 import time
 from pathlib import Path
 
-from autumn.dashboard_callback import DashboardCallback
-from autumn.models import DashboardState, RunStatus
+from dashboard_callback import DashboardCallback
+from models import DashboardState, RunStatus
 
 
 class FakeApp:

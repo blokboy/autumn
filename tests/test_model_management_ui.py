@@ -2,10 +2,10 @@
 
 from textual.widgets import Static, TabbedContent, Tree
 
-from autumn import local_models
-from autumn.app import AutumnApp
-from autumn.models import PromptRoutingPolicy, ProviderAccount, ProviderModel
-from autumn.widgets.model_catalog_view import ModelCatalogView
+import local_models
+from app import AutumnApp
+from models import PromptRoutingPolicy, ProviderAccount, ProviderModel
+from widgets.model_catalog_view import ModelCatalogView
 
 
 async def test_models_tab_lists_installed_models_and_sets_default(tmp_path):

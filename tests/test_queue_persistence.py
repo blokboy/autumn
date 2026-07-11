@@ -12,13 +12,13 @@ from pathlib import Path
 
 from textual.widgets import Static
 
-from autumn import chat_store, queue_store
-from autumn.app import AutumnApp
-from autumn.cli import LaunchSpec
-from autumn.models import ChatMessage, RunStatus
-from autumn.screens.confirm_screen import ConfirmScreen
-from autumn.screens.dashboard_screen import DashboardScreen
-from autumn.screens.input_screen import InputScreen
+import chat_store, queue_store
+from app import AutumnApp
+from cli import LaunchSpec
+from models import ChatMessage, RunStatus
+from screens.confirm_screen import ConfirmScreen
+from screens.dashboard_screen import DashboardScreen
+from screens.input_screen import InputScreen
 
 
 def _dead_pid() -> int:

@@ -5,8 +5,8 @@ import os
 import subprocess
 import sys
 
-from autumn import chat_store
-from autumn.models import ChatMessage
+import chat_store
+from models import ChatMessage
 
 
 def _dead_pid() -> int:

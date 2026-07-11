@@ -10,11 +10,11 @@ import threading
 import pytest
 from textual.widgets import Input, Static
 
-from autumn import local_models
-from autumn.app import AutumnApp
-from autumn.local_model_runner import LocalModelRunner, LocalModelRuntimeError
-from autumn.models import ChatMessage, LocalModel
-from autumn.widgets.command_bar import CommandBar
+import local_models
+from app import AutumnApp
+from local_model_runner import LocalModelRunner, LocalModelRuntimeError
+from models import ChatMessage, LocalModel
+from widgets.command_bar import CommandBar
 
 # --- LocalModelRunner.generate_stream unit tests -----------------------------
 

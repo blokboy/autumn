@@ -5,8 +5,8 @@ from dataclasses import dataclass
 import groq
 import pytest
 
-from autumn.groq_runner import GroqRunner, GroqRuntimeError
-from autumn.models import ChatMessage
+from groq_runner import GroqRunner, GroqRuntimeError
+from models import ChatMessage
 
 
 @dataclass
@@ -137,7 +137,7 @@ def test_groq_runner_defaults_to_a_real_groq_client_when_none_injected(monkeypat
 
 
 def test_groq_runner_prefers_a_stored_key_over_the_env_var(monkeypatch):
-    from autumn import credentials
+    import credentials
 
     monkeypatch.setenv("GROQ_API_KEY", "from-env")
     credentials.set_key("groq", "from-store")

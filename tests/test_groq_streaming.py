@@ -9,10 +9,10 @@ import groq
 import pytest
 from textual.widgets import Input, Static
 
-from autumn.app import AutumnApp
-from autumn.groq_runner import GroqRunner, GroqRuntimeError
-from autumn.models import ChatMessage, PromptRoutingPolicy, ProviderAccount, ProviderModel
-from autumn.widgets.command_bar import CommandBar
+from app import AutumnApp
+from groq_runner import GroqRunner, GroqRuntimeError
+from models import ChatMessage, PromptRoutingPolicy, ProviderAccount, ProviderModel
+from widgets.command_bar import CommandBar
 
 # --- GroqRunner.generate_stream unit tests -----------------------------------
 

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from autumn.local_model_runner import LocalModelRunner, LocalModelRuntimeError
-from autumn.models import ChatMessage, LocalModel
+from local_model_runner import LocalModelRunner, LocalModelRuntimeError
+from models import ChatMessage, LocalModel
 
 
 def test_llama_cpp_runner_returns_assistant_message_from_runtime_output(tmp_path):
