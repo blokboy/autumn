@@ -97,7 +97,13 @@ class CatalogEntry:
     `PromptRoutingPolicy`, addressed by (group, name) so the Models tab and
     `model_router.choose_model`'s fallback chain share one shape. `group` is
     "Local" for installed local models, or a provider name (e.g. "groq") for
-    provider-backed entries."""
+    provider-backed entries.
+
+    `disabled` marks a row that is visible in the Models tab but never
+    selectable (see `stub_providers.py`, #15) -- always `False` for anything
+    that comes out of `catalog.build_entries`, which is the only entry list
+    `model_router.choose_model` ever consults, so a disabled row can never
+    accidentally become the model an actual prompt gets routed to."""
 
     group: str
     name: str
@@ -107,6 +113,7 @@ class CatalogEntry:
     provider: str | None = None
     account_id: str | None = None
     is_default: bool = False
+    disabled: bool = False
 
 
 @dataclass

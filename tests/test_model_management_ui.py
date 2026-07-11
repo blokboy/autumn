@@ -177,6 +177,80 @@ async def test_models_tab_groups_entries_by_source(tmp_path):
 
         view = app.screen.query_one("#models", ModelCatalogView)
         tree = view.query_one("#model-tree", Tree)
+        # "Local" first, then the always-visible Anthropic/OpenAI stub
+        # groups (#15) -- no provider policy was supplied, so there's no
+        # eligible Groq group in between this time.
         group_labels = [str(node.label) for node in tree.root.children]
-        assert group_labels == ["Local"]
+        assert group_labels == ["Local", "Anthropic", "OpenAI"]
         assert len(tree.root.children[0].children) == 1
+
+
+async def test_anthropic_and_openai_always_appear_grayed_out(tmp_path):
+    """#15: Anthropic/OpenAI must always show up in the Models tab -- with no
+    provider policy, no env vars, and no local models installed at all --
+    with a couple of representative subrows each, rendered visibly
+    disabled."""
+    app = AutumnApp(runs_root=tmp_path, model_catalog_root=tmp_path / "models")
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        app.screen.query_one(TabbedContent).active = "models-tab"
+        await pilot.pause()
+
+        view = app.screen.query_one("#models", ModelCatalogView)
+        tree = view.query_one("#model-tree", Tree)
+        group_labels = [str(node.label) for node in tree.root.children]
+        assert group_labels == ["Anthropic", "OpenAI"]
+
+        for group_node in tree.root.children:
+            # Group header itself is dimmed.
+            assert any(span.style == "dim" for span in group_node.label.spans)
+            assert group_node.children, "expected representative model subrows"
+            for leaf in group_node.children:
+                assert "not available yet" in str(leaf.label)
+                assert any(span.style == "dim" for span in leaf.label.spans)
+
+
+async def test_setting_default_on_disabled_provider_row_is_a_no_op_with_notification(tmp_path):
+    """#15: pressing `d` on an Anthropic/OpenAI row must not change the
+    active default, and must surface a friendly notification instead of
+    crashing."""
+    first = tmp_path / "first.gguf"
+    first.write_bytes(b"first")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="first", source_path=first)
+    app = AutumnApp(runs_root=tmp_path, model_catalog_root=catalog_root)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        app.screen.query_one(TabbedContent).active = "models-tab"
+        await pilot.pause()
+
+        view = app.screen.query_one("#models", ModelCatalogView)
+        tree = view.query_one("#model-tree", Tree)
+        # Root's children: "Local" (index 0), then "Anthropic" (index 1).
+        anthropic_leaf = tree.root.children[1].children[0]
+        assert anthropic_leaf.data.group == "Anthropic"
+        tree.move_cursor(anthropic_leaf)
+        await pilot.press("d")
+        await pilot.pause()
+
+        # Unchanged: the real local default is still "first".
+        assert local_models.get_default(catalog_root).name == "first"
+        summary = view.query_one("#model-catalog-summary", Static).content
+        assert "Default: first" in str(summary)
+
+        notifications = list(app._notifications)
+        assert any(
+            "isn't supported yet for catalog group 'Anthropic'" in notification.message
+            for notification in notifications
+        )
+        assert notifications[-1].severity == "warning"

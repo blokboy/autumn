@@ -15,7 +15,7 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import ListView, TabbedContent, TabPane
 
-from autumn import catalog, registry
+from autumn import catalog, registry, stub_providers
 from autumn.models import CatalogEntry, DashboardState, PromptRoutingPolicy, RunStatus
 from autumn.models import ChatMessage
 from autumn.widgets.chat_view import ChatView
@@ -139,9 +139,18 @@ class DashboardScreen(Screen):
         self.refresh_models()
 
     def _catalog_entries(self) -> list[CatalogEntry]:
-        if self._model_catalog_root is None:
-            return []
-        return catalog.build_entries(self._model_catalog_root, policy=self._prompt_routing_policy)
+        """The Models tab's full entry list: routable entries (local models
+        plus any eligible provider models) from `catalog.build_entries`,
+        followed by the always-visible, never-routable Anthropic/OpenAI stub
+        rows (#15) -- appended here rather than inside `build_entries` so
+        `model_router.choose_model`'s routing catalog never sees them (see
+        `stub_providers.py` for why)."""
+        routable = (
+            catalog.build_entries(self._model_catalog_root, policy=self._prompt_routing_policy)
+            if self._model_catalog_root is not None
+            else []
+        )
+        return routable + stub_providers.disabled_provider_entries()
 
     def refresh_models(self) -> None:
         self.query_one("#models", ModelCatalogView).refresh_from_entries(self._catalog_entries())
