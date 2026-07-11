@@ -40,6 +40,22 @@ class LogLine:
     text: str
 
 
+@dataclass(frozen=True)
+class ToolCitation:
+    """Source-attribution metadata for an assistant reply grounded by a tool
+    call (see docs/prd/chat-search-tools.md, "Tool-call round"). Deliberately
+    generic across tools rather than docs-specific: `tool` names whichever
+    tool produced it (e.g. "search_docs"), and `sources` is a list of
+    human-readable labels -- "<path> — <heading>" for `search_docs`, full
+    URLs for a later `search_web` -- so `chat_view.py`'s citation rendering
+    never needs to hardcode any one tool's citation shape; a new tool only
+    needs to start populating `sources` with whatever labels make sense for
+    it."""
+
+    tool: str
+    sources: list[str] = field(default_factory=list)
+
+
 @dataclass
 class ChatMessage:
     """One message in a dashboard-scoped chat transcript."""
@@ -47,6 +63,11 @@ class ChatMessage:
     role: Literal["user", "assistant"]
     text: str
     model: str | None = None
+    # Set only on an assistant reply that was grounded by a successful tool
+    # call (see ToolCitation above). `None` for a user message or an
+    # assistant reply that answered without using a tool -- chat_view.py
+    # renders nothing extra in that case, matching today's behavior exactly.
+    citation: ToolCitation | None = None
 
 
 @dataclass
