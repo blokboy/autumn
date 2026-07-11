@@ -1,156 +1,20 @@
-"""Behavioral tests for Groq's streaming chat completions path: incremental
-`GroqRunner.generate_stream` chunk delivery, plus the dashboard-level
-streaming/cancel/mid-stream-error behavior wired up in AutumnApp."""
+"""Behavioral tests for the dashboard-level streaming/cancel/mid-stream-error
+behavior wired up in AutumnApp, using a scripted fake `GroqRunner`.
+
+`GroqRunner.generate_stream`'s own unit-level mechanics (chunk delivery,
+cancel, mid-stream error) now live in test_groq_tool_calls.py, since
+generate_stream's real streaming only happens on the tool round's second
+call -- see docs/prd/chat-search-tools.md, "Tool-call round"."""
 
 import threading
-from dataclasses import dataclass
 
-import groq
 import pytest
 from textual.widgets import Input, Static
 
 from app import AutumnApp
-from groq_runner import GroqRunner, GroqRuntimeError
+from groq_runner import GroqRuntimeError
 from models import ChatMessage, PromptRoutingPolicy, ProviderAccount, ProviderModel
 from widgets.command_bar import CommandBar
-
-# --- GroqRunner.generate_stream unit tests -----------------------------------
-
-
-@dataclass
-class _FakeDelta:
-    content: str | None
-
-
-@dataclass
-class _FakeStreamChoice:
-    delta: _FakeDelta
-
-
-@dataclass
-class _FakeChunk:
-    choices: list[_FakeStreamChoice]
-
-
-class _FakeStream:
-    """Mimics the iterable `groq.Stream` returned by
-    `client.chat.completions.create(..., stream=True)`: yields chunks, then
-    (optionally) raises a `groq.GroqError` at the end to simulate an error
-    that surfaces mid-iteration rather than at call time."""
-
-    def __init__(self, chunks: list[_FakeChunk], error: Exception | None = None):
-        self._chunks = chunks
-        self._error = error
-        self.closed = False
-
-    def __iter__(self):
-        for chunk in self._chunks:
-            yield chunk
-        if self._error is not None:
-            raise self._error
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class _StreamingCompletions:
-    def __init__(self, stream: _FakeStream, seen_calls: list[dict]):
-        self._stream = stream
-        self._seen_calls = seen_calls
-
-    def create(self, *, model: str, messages: list[dict[str, str]], stream: bool = False):
-        self._seen_calls.append({"model": model, "messages": messages, "stream": stream})
-        return self._stream
-
-
-class _StreamingChat:
-    def __init__(self, completions: _StreamingCompletions):
-        self.completions = completions
-
-
-class _StreamingGroqClient:
-    def __init__(self, stream: _FakeStream):
-        self.seen_calls: list[dict] = []
-        self.chat = _StreamingChat(_StreamingCompletions(stream, self.seen_calls))
-
-
-def _chunk(content: str | None) -> _FakeChunk:
-    return _FakeChunk(choices=[_FakeStreamChoice(delta=_FakeDelta(content=content))])
-
-
-def test_generate_stream_calls_on_chunk_for_each_non_empty_delta():
-    chunks = [
-        _chunk(None),  # role-only first chunk, as real Groq/OpenAI-shaped streams send
-        _chunk("Hello"),
-        _chunk(" world"),
-        _chunk(None),  # trailing chunk with no content
-    ]
-    stream = _FakeStream(chunks)
-    client = _StreamingGroqClient(stream)
-    runner = GroqRunner(client=client)
-
-    received: list[str] = []
-    runner.generate_stream(
-        [ChatMessage(role="user", text="hi")],
-        "llama-3.1-8b-instant",
-        on_chunk=received.append,
-    )
-
-    assert received == ["Hello", " world"]
-    assert client.seen_calls == [
-        {
-            "model": "llama-3.1-8b-instant",
-            "messages": [{"role": "user", "content": "hi"}],
-            "stream": True,
-        }
-    ]
-
-
-def test_generate_stream_stops_pulling_and_closes_stream_on_cancel():
-    chunks = [_chunk("Hello"), _chunk(" world"), _chunk("!")]
-    stream = _FakeStream(chunks)
-    client = _StreamingGroqClient(stream)
-    runner = GroqRunner(client=client)
-
-    cancel_event = threading.Event()
-    received: list[str] = []
-
-    def on_chunk(text: str) -> None:
-        received.append(text)
-        if text == "Hello":
-            cancel_event.set()
-
-    runner.generate_stream(
-        [ChatMessage(role="user", text="hi")],
-        "llama-3.1-8b-instant",
-        on_chunk=on_chunk,
-        cancel_event=cancel_event,
-    )
-
-    assert received == ["Hello"]
-    assert stream.closed is True
-
-
-def test_generate_stream_raises_groq_runtime_error_from_mid_stream_failure():
-    chunks = [_chunk("Hello")]
-    request = groq._base_client.httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
-    error = groq.APIConnectionError(message="Connection error.", request=request)
-    stream = _FakeStream(chunks, error=error)
-    client = _StreamingGroqClient(stream)
-    runner = GroqRunner(client=client)
-
-    received: list[str] = []
-    with pytest.raises(GroqRuntimeError, match="llama-3.1-8b-instant failed: Connection error."):
-        runner.generate_stream(
-            [ChatMessage(role="user", text="hi")],
-            "llama-3.1-8b-instant",
-            on_chunk=received.append,
-        )
-
-    # Chunks that arrived before the error still reached on_chunk -- the
-    # caller's closure is the only place that partial text lives.
-    assert received == ["Hello"]
-
 
 # --- AutumnApp-level streaming/cancel/error tests -----------------------------
 
