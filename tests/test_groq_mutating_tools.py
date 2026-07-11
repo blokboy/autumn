@@ -265,11 +265,13 @@ def test_all_five_mutating_tools_are_offered(tmp_path):
 
     [call] = client.seen_calls
     offered_names = {tool["function"]["name"] for tool in call["tools"]}
-    assert offered_names == {
-        "search_docs",
+    # Subset, not exact-equality -- the read-only tools (#29) are offered
+    # alongside these five mutating ones; this test only cares that the
+    # mutating tools are all present.
+    assert {
         "install_model",
         "set_default_model",
         "add_key",
         "remove_model",
         "remove_key",
-    }
+    }.issubset(offered_names)

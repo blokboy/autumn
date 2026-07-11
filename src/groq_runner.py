@@ -8,6 +8,10 @@ from typing import Any, Callable, Protocol
 import groq
 
 import credentials
+import list_keys
+import list_models
+import list_runs
+import paths
 import search_docs
 import system_tools
 from models import ChatMessage
@@ -27,21 +31,19 @@ GROQ_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"
 ConfirmFn = Callable[[str, float], bool]
 
 # Tools offered to Groq on every chat turn (see docs/prd/chat-search-tools.md,
-# "Tool-call round", and docs/prd/chat-cli-parity-tools.md for the mutating
-# ones). `search_docs` is always offered -- it's local, free, and has no
-# key/opt-in gate. The five system-control tools from `system_tools.py` are
-# always offered too, but each one is confirmation-gated (see
-# `_execute_tool_call`) rather than executing immediately like `search_docs`.
-_TOOLS: list[dict[str, Any]] = [search_docs.TOOL_SCHEMA, *[tool.schema for tool in system_tools.MUTATING_TOOLS]]
-
-# name -> callable executing that tool's arguments and returning the result
-# text to hand back to Groq as a tool-role message. Only for tools that need
-# no confirmation -- mutating tools are looked up via `_MUTATING_TOOLS_BY_NAME`
-# instead (see `_execute_tool_call`), since they need a confirmation step
-# `_TOOL_EXECUTORS` alone can't express.
-_TOOL_EXECUTORS: dict[str, Callable[[dict[str, Any], Path | None], str]] = {
-    search_docs.TOOL_NAME: lambda arguments, docs_root: search_docs.run_tool(arguments, root=docs_root),
-}
+# "Tool-call round", and docs/prd/chat-cli-parity-tools.md for the read-only
+# and mutating rows). The four read-only tools (`search_docs`, `list_models`,
+# `list_keys`, `list_runs`) need no confirmation and are always offered. The
+# five mutating tools from `system_tools.py` are always offered too, but each
+# one is confirmation-gated (see `_execute_tool_call`/`_execute_mutating_tool`)
+# rather than executing immediately like the read-only ones.
+_TOOLS: list[dict[str, Any]] = [
+    search_docs.TOOL_SCHEMA,
+    list_models.TOOL_SCHEMA,
+    list_keys.TOOL_SCHEMA,
+    list_runs.TOOL_SCHEMA,
+    *[tool.schema for tool in system_tools.MUTATING_TOOLS],
+]
 
 _MUTATING_TOOLS_BY_NAME: dict[str, system_tools.MutatingTool] = {
     tool.name: tool for tool in system_tools.MUTATING_TOOLS
@@ -93,6 +95,7 @@ class GroqRunner:
         client: GroqClient | None = None,
         docs_root: Path | None = None,
         catalog_root: Path | None = None,
+        runs_root: Path | None = None,
         confirm: ConfirmFn | None = None,
     ) -> None:
         self._client = (
@@ -101,10 +104,30 @@ class GroqRunner:
         # Override point for tests; `None` means `search_docs` resolves the
         # real repo root itself (see search_docs._repo_root).
         self._docs_root = docs_root
-        # Override point for tests; `None` means `system_tools.run_tool`
-        # resolves the real models root itself (see paths.models_root()).
-        self._catalog_root = catalog_root
+        # Unlike `docs_root`, the system tools (`list_models`/`list_runs`/the
+        # mutating catalog tools) have no self-resolving fallback of their
+        # own -- so the real defaults are resolved here, once, rather than
+        # threaded through as `None` on every call.
+        self._catalog_root = catalog_root if catalog_root is not None else paths.models_root()
+        self._runs_root = runs_root if runs_root is not None else paths.default_runs_root()
         self._confirm = confirm
+
+        # name -> callable executing that tool's arguments and returning the
+        # result text to hand back to Groq as a tool-role message. Built here
+        # (not module-level) so each executor closes over exactly the context
+        # it needs -- e.g. `list_models`'s `catalog_root` -- rather than every
+        # tool executor sharing one fixed extra-parameter signature. Only
+        # read-only tools live here; mutating tools go through
+        # `_MUTATING_TOOLS_BY_NAME`/`_execute_mutating_tool` instead, since
+        # they need a confirmation step this dict alone can't express.
+        self._tool_executors: dict[str, Callable[[dict[str, Any]], str]] = {
+            search_docs.TOOL_NAME: lambda arguments: search_docs.run_tool(arguments, root=self._docs_root),
+            list_models.TOOL_NAME: lambda arguments: list_models.run_tool(
+                arguments, catalog_root=self._catalog_root
+            ),
+            list_keys.TOOL_NAME: list_keys.run_tool,
+            list_runs.TOOL_NAME: lambda arguments: list_runs.run_tool(arguments, runs_root=self._runs_root),
+        }
 
     def generate(self, messages: list[ChatMessage], model_name: str) -> ChatMessage:
         payload = _to_payload(messages)
@@ -131,18 +154,21 @@ class GroqRunner:
         Runs the single-round tool-calling mechanism from
         docs/prd/chat-search-tools.md ("Tool-call round") ahead of streaming:
 
-        1. A non-streaming "decide" call is sent with `search_docs`'s schema
+        1. A non-streaming "decide" call is sent with every tool's schema
+           (`_TOOLS`: the read-only `search_docs`/`list_models`/`list_keys`/
+           `list_runs`, plus the mutating system tools from `system_tools.py`)
            in `tools`.
         2. If that response has no `tool_calls`, its text is already the
            final answer -- it's handed to `on_chunk` in one piece (no
            further streaming needed) and this returns.
         3. If it has one (or more; only the first is used) `tool_calls`, that
            tool is executed and a second call is made with the tool result
-           appended as a tool-role message. A tool failure doesn't abort the
-           turn: it's surfaced to `on_chunk` as a visible inline notice, and
-           the second call still proceeds with a tool-role message
-           describing the failure, so the model can still attempt a
-           best-effort, caveated answer.
+           appended as a tool-role message. A mutating tool is confirmed
+           first (see `_execute_mutating_tool`); a read-only tool executes
+           immediately. A tool failure doesn't abort the turn: it's surfaced
+           to `on_chunk` as a visible inline notice, and the second call
+           still proceeds with a tool-role message describing the failure,
+           so the model can still attempt a best-effort, caveated answer.
         4. The second call's response streams via the same chunked mechanism
            `generate_stream` already used before tool-calling existed. No
            `tools` are offered on this second call -- there is no provision
@@ -226,13 +252,13 @@ class GroqRunner:
             if mutating_tool is not None:
                 result_text, failure_notice = self._execute_mutating_tool(mutating_tool, arguments)
             else:
-                executor = _TOOL_EXECUTORS.get(name)
+                executor = self._tool_executors.get(name)
                 if executor is None:
                     result_text = f"Error: unknown tool {name!r}"
                     failure_notice = f"[{name} failed: unknown tool]\n\n"
                 else:
                     try:
-                        result_text = executor(arguments, self._docs_root)
+                        result_text = executor(arguments)
                     except Exception as exc:
                         result_text = f"Error: {name} failed: {exc}"
                         failure_notice = f"[{name} failed: {exc}]\n\n"
@@ -247,14 +273,15 @@ class GroqRunner:
         confirmation-gated (see docs/prd/chat-cli-parity-tools.md; there is
         no autonomous-mode bypass yet, that's a later ticket). Returns
         `(result_text, failure_notice)`, same shape `_execute_tool_call`
-        uses for `search_docs`.
+        uses for the read-only tools.
 
         A decline produces no `failure_notice` -- it isn't an error, it's
         the user's choice, and the model's final answer is expected to
         acknowledge it (via the tool-result content) rather than retry or
         proceed as if it happened. An actual execution failure (invalid
         target, `SystemToolError`, etc.) does produce a `failure_notice`,
-        same visible-degrade contract `search_docs` failures already use.
+        same visible-degrade contract the read-only tools' failures already
+        use.
 
         No confirmation surface wired up (`self._confirm is None`) is
         treated the same as an explicit decline -- silently allowing a

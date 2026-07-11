@@ -19,7 +19,7 @@ from textual.widgets import Input, Static
 
 import search_docs
 from app import AutumnApp
-from groq_runner import GroqRunner, GroqRuntimeError
+from groq_runner import _TOOLS, GroqRunner, GroqRuntimeError
 from models import ChatMessage, PromptRoutingPolicy, ProviderAccount, ProviderModel
 from widgets.command_bar import CommandBar
 
@@ -182,11 +182,8 @@ def test_generate_stream_with_no_tool_call_renders_full_text_in_one_chunk(tmp_pa
     # tool call to execute first.
     assert len(client.seen_calls) == 1
     assert client.seen_calls[0]["stream"] is False
-    # search_docs is always offered alongside whatever other tools this
-    # ticket set has added (see docs/prd/chat-cli-parity-tools.md) -- a
-    # membership check here rather than exact-list equality, so later tool
-    # additions don't require editing this assertion.
-    assert search_docs.TOOL_SCHEMA in client.seen_calls[0]["tools"]
+    assert client.seen_calls[0]["tools"] == _TOOLS
+    assert search_docs.TOOL_SCHEMA in _TOOLS
     assert client.seen_calls[0]["messages"] == [{"role": "user", "content": "what is autumn"}]
 
 
@@ -198,7 +195,8 @@ def test_generate_stream_sends_search_docs_schema_on_every_decide_call(tmp_path)
     runner.generate_stream([ChatMessage(role="user", text="hi")], "llama-3.1-8b-instant", on_chunk=lambda _: None)
 
     [call] = client.seen_calls
-    assert search_docs.TOOL_SCHEMA in call["tools"]
+    assert call["tools"] == _TOOLS
+    assert search_docs.TOOL_SCHEMA in _TOOLS
 
 
 # --- One tool call: search_docs executes, second call streams ------------

@@ -782,7 +782,9 @@ class AutumnApp(App):
         `ChatMessage` already sitting in `self.chat_messages` via
         `_run_stream_reply`."""
         groq_runner = self._groq_runner or GroqRunner(
-            catalog_root=self._model_catalog_root, confirm=self._confirm_from_thread
+            catalog_root=self._model_catalog_root,
+            runs_root=self.runs_root,
+            confirm=self._confirm_from_thread,
         )
         self._run_stream_reply(
             choice=choice,

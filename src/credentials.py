@@ -18,6 +18,20 @@ from pathlib import Path
 
 import paths
 
+# Providers autumn knows the *names* of, for listing purposes (`autumn keys
+# list`, and the `list_keys` chat tool), even before they're wired up as real
+# completion providers (see #21) -- keeps both surfaces showing the full
+# expected set rather than only whatever happens to already have a stored
+# key. Also doubles as the `choices=` set for `autumn keys add`/`remove`.
+KNOWN_PROVIDERS = ("groq", "anthropic", "openai", "tavily")
+
+
+def env_var_for_provider(provider: str) -> str:
+    """`groq` -> `GROQ_API_KEY`, matching the naming convention every
+    provider's own module already reads its env var by (see
+    `groq_policy.ENV_VAR`)."""
+    return f"{provider.upper()}_API_KEY"
+
 
 def _path() -> Path:
     return paths.credentials_path()
