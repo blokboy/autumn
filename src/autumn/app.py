@@ -353,7 +353,13 @@ class AutumnApp(App):
         return self._model_download_fn
 
     def set_default_model(self, group: str, name: str) -> None:
-        catalog.set_default(self._model_catalog_root, group, name)
+        try:
+            catalog.set_default(
+                self._model_catalog_root, group, name, policy=self._prompt_routing_policy
+            )
+        except ValueError as exc:
+            self.notify(str(exc), severity="warning")
+            return
         self.notify(f"Default model set to {name}", severity="information")
 
     def finish_model_download(self, *, focus_models_tab: bool = False) -> None:

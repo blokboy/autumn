@@ -117,3 +117,83 @@ def test_set_default_raises_for_non_local_group(tmp_path):
         assert "claude" in str(exc)
     else:
         raise AssertionError("expected ValueError for non-local catalog group")
+
+
+def _claude_policy(is_signed_in: bool = True) -> PromptRoutingPolicy:
+    return PromptRoutingPolicy(
+        provider_accounts=[
+            ProviderAccount(provider="claude", account_id="personal", is_signed_in=is_signed_in)
+        ],
+        provider_models=[
+            ProviderModel(name="claude/sonnet", provider="claude", account_id="personal", priority=5)
+        ],
+    )
+
+
+def test_set_default_persists_eligible_provider_default(tmp_path):
+    catalog_root = tmp_path / "models"
+
+    entry = catalog.set_default(catalog_root, "claude", "claude/sonnet", policy=_claude_policy())
+
+    assert entry.group == "claude"
+    assert entry.name == "claude/sonnet"
+    assert entry.is_default is True
+
+    entries = catalog.build_entries(catalog_root, local_override=[], policy=_claude_policy())
+    assert entries == [catalog.default_entry(entries)]
+    assert entries[0].name == "claude/sonnet"
+
+
+def test_set_default_raises_for_ineligible_provider_entry(tmp_path):
+    catalog_root = tmp_path / "models"
+
+    try:
+        catalog.set_default(catalog_root, "claude", "claude/sonnet", policy=_claude_policy(is_signed_in=False))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for an ineligible (not signed in) provider entry")
+
+    # Ineligible attempt must not have persisted anything.
+    entries = catalog.build_entries(catalog_root, local_override=[], policy=_claude_policy())
+    assert catalog.default_entry(entries) is None
+
+
+def test_set_default_ignores_override_once_no_longer_eligible(tmp_path):
+    catalog_root = tmp_path / "models"
+    catalog.set_default(catalog_root, "claude", "claude/sonnet", policy=_claude_policy())
+
+    # Key/sign-in revoked after the fact -- the persisted override should be
+    # silently ignored rather than raising or resurrecting the entry.
+    entries = catalog.build_entries(
+        catalog_root, local_override=[], policy=_claude_policy(is_signed_in=False)
+    )
+    assert entries == []
+
+
+def test_set_default_local_clears_prior_provider_override(tmp_path):
+    source = tmp_path / "tiny.gguf"
+    source.write_bytes(b"tiny")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=source)
+
+    catalog.set_default(catalog_root, "claude", "claude/sonnet", policy=_claude_policy())
+    catalog.set_default(catalog_root, catalog.LOCAL_GROUP, "tiny")
+
+    entries = catalog.build_entries(catalog_root, policy=_claude_policy())
+    assert catalog.default_entry(entries).name == "tiny"
+    assert sum(entry.is_default for entry in entries) == 1
+
+
+def test_build_entries_never_has_more_than_one_default_when_override_active(tmp_path):
+    source = tmp_path / "tiny.gguf"
+    source.write_bytes(b"tiny")
+    catalog_root = tmp_path / "models"
+    # install_model makes the first local model installed the default.
+    local_models.install_model(catalog_root, name="tiny", source_path=source)
+
+    catalog.set_default(catalog_root, "claude", "claude/sonnet", policy=_claude_policy())
+
+    entries = catalog.build_entries(catalog_root, policy=_claude_policy())
+    assert sum(entry.is_default for entry in entries) == 1
+    assert catalog.default_entry(entries).name == "claude/sonnet"
