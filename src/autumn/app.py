@@ -473,29 +473,37 @@ class AutumnApp(App):
         self._finalize_assistant_reply(message, choice, on_complete=on_complete)
 
     def cancel_active_generation(self) -> None:
-        """Wired to DashboardScreen's escape binding: stops whatever Groq
-        stream is currently in-flight, if any, keeping the partial text
-        that's already streamed in (see `_run_groq_stream`). No-op if nothing
-        is currently streaming."""
+        """Wired to DashboardScreen's escape binding: stops whatever stream
+        (Groq or local llama.cpp) is currently in-flight, if any, keeping
+        the partial text that's already streamed in (see
+        `_run_stream_reply`). No-op if nothing is currently streaming."""
         if self._active_cancel_event is not None:
             self._active_cancel_event.set()
 
-    def _run_groq_stream(
+    def _run_stream_reply(
         self,
         *,
         choice: ModelChoice,
-        snapshot: list[ChatMessage],
         insert_after: ChatMessage | None,
         on_complete: Callable[[], None] | None,
+        stream: Callable[..., None],
+        error_type: type[Exception],
+        finalize_success: Callable[[ChatMessage], None] | None = None,
     ) -> None:
-        """Runs on `_answer_prompt_async`'s background thread for a Groq
-        choice: streams the reply token-by-token into a placeholder
-        `ChatMessage` already sitting in `self.chat_messages`, throttling UI
-        refreshes, and handles cancellation/mid-stream errors by keeping
-        whatever text already arrived rather than discarding it (unlike the
-        local-model/offline-tiny fallback paths -- see module docstring /
-        PRD "Error handling mid-stream")."""
-        groq_runner = self._groq_runner or GroqRunner()
+        """Shared skeleton for a streaming reply, used by both
+        `_run_groq_stream` and `_run_local_stream`: inserts an empty
+        placeholder `ChatMessage` into `self.chat_messages`, streams chunks
+        into it via `stream(on_chunk=..., cancel_event=...)` (already bound
+        to whichever runner/model/messages produced it) with throttled UI
+        refreshes, and on completion appends a `[stopped]`/`[interrupted:
+        ...]` marker for cancellation/errors -- keeping whatever text
+        already streamed in either way, never substituting a different reply
+        (see module docstring / PRD "Error handling mid-stream").
+
+        `finalize_success`, if given, post-processes the message only when
+        the stream completed cleanly (no error, not cancelled) -- e.g.
+        local's trailing-whitespace strip, which only makes sense for output
+        that actually finished rather than partial text."""
         message = ChatMessage(role="assistant", text="", model=choice.name)
         cancel_event = threading.Event()
         self._active_cancel_event = cancel_event
@@ -513,12 +521,10 @@ class AutumnApp(App):
                 last_refresh = now
                 self.call_from_thread(self._refresh_chat_display)
 
-        error: GroqRuntimeError | None = None
+        error: Exception | None = None
         try:
-            groq_runner.generate_stream(
-                snapshot, choice.name, on_chunk=on_chunk, cancel_event=cancel_event
-            )
-        except GroqRuntimeError as exc:
+            stream(on_chunk=on_chunk, cancel_event=cancel_event)
+        except error_type as exc:
             error = exc
 
         # Guard clearing: only clear if this is still the event this
@@ -531,17 +537,78 @@ class AutumnApp(App):
             message.text = _append_stream_marker(message.text, f"[interrupted: {error}]")
         elif cancel_event.is_set():
             message.text = _append_stream_marker(message.text, "[stopped]")
+        elif finalize_success is not None:
+            finalize_success(message)
 
         # `choice` is untouched here even on cancel/error -- deliberately
-        # different from the local/offline-tiny fallback paths below, which
-        # discard the failed choice and regenerate a whole new offline-tiny
-        # reply. Throwing away real partial output the user already saw would
-        # be worse than a status line that still says "Model: <groq model>".
+        # different from the offline-tiny fallback path in
+        # `_answer_prompt_async` (the non-executable provider stub), which
+        # discards the failed choice and regenerates a whole new
+        # offline-tiny reply. Throwing away real partial output the user
+        # already saw would be worse than a status line that still says
+        # "Model: <model>".
         self.call_from_thread(
             self._finalize_assistant_reply,
             message,
             choice,
             on_complete=on_complete,
+        )
+
+    def _run_groq_stream(
+        self,
+        *,
+        choice: ModelChoice,
+        snapshot: list[ChatMessage],
+        insert_after: ChatMessage | None,
+        on_complete: Callable[[], None] | None,
+    ) -> None:
+        """Runs on `_answer_prompt_async`'s background thread for a Groq
+        choice: streams the reply token-by-token into a placeholder
+        `ChatMessage` already sitting in `self.chat_messages` via
+        `_run_stream_reply`."""
+        groq_runner = self._groq_runner or GroqRunner()
+        self._run_stream_reply(
+            choice=choice,
+            insert_after=insert_after,
+            on_complete=on_complete,
+            stream=lambda *, on_chunk, cancel_event: groq_runner.generate_stream(
+                snapshot, choice.name, on_chunk=on_chunk, cancel_event=cancel_event
+            ),
+            error_type=GroqRuntimeError,
+        )
+
+    def _run_local_stream(
+        self,
+        *,
+        choice: ModelChoice,
+        snapshot: list[ChatMessage],
+        insert_after: ChatMessage | None,
+        on_complete: Callable[[], None] | None,
+    ) -> None:
+        """Runs on `_answer_prompt_async`'s background thread for a local
+        llama.cpp choice: streams the reply incrementally (via `Popen`, see
+        `LocalModelRunner.generate_stream`) into a placeholder `ChatMessage`
+        already sitting in `self.chat_messages` via `_run_stream_reply`. A
+        `LocalModelRuntimeError` (missing `llama-cli`, non-zero exit, crash)
+        is handled the same as a mid-stream Groq error: the partial text
+        already streamed in is kept with an `[interrupted: ...]` marker
+        appended, not discarded in favor of a fresh offline-tiny reply."""
+        model = LocalModel(
+            name=choice.name,
+            backend=choice.backend,
+            path=choice.path,
+            context_window=choice.context_window,
+            is_default=True,
+        )
+        self._run_stream_reply(
+            choice=choice,
+            insert_after=insert_after,
+            on_complete=on_complete,
+            stream=lambda *, on_chunk, cancel_event: self._local_model_runner.generate_stream(
+                snapshot, model, on_chunk=on_chunk, cancel_event=cancel_event
+            ),
+            error_type=LocalModelRuntimeError,
+            finalize_success=lambda message: setattr(message, "text", message.text.strip()),
         )
 
     def _answer_prompt_async(
@@ -560,25 +627,13 @@ class AutumnApp(App):
                 policy=self._prompt_routing_policy,
             )
             if choice.backend == "llama.cpp" and choice.path is not None:
-                try:
-                    message = self._local_model_runner.generate(
-                        snapshot,
-                        LocalModel(
-                            name=choice.name,
-                            backend=choice.backend,
-                            path=choice.path,
-                            context_window=choice.context_window,
-                            is_default=True,
-                        ),
-                    )
-                except LocalModelRuntimeError as exc:
-                    choice = ModelChoice(
-                        name=local_llm.OFFLINE_TINY_MODEL,
-                        backend="builtin",
-                        path=None,
-                        reason=str(exc),
-                    )
-                    message = local_llm.generate_response(snapshot, choice)
+                self._run_local_stream(
+                    choice=choice,
+                    snapshot=snapshot,
+                    insert_after=insert_after,
+                    on_complete=on_complete,
+                )
+                return
             elif choice.backend == "provider" and choice.provider == "groq":
                 self._run_groq_stream(
                     choice=choice,
