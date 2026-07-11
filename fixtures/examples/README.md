@@ -10,6 +10,9 @@ From the repository root, try one of:
 autumn run fixtures/examples/uppercase_words.py --run-dir fixtures/examples/runs/uppercase-words
 autumn run fixtures/examples/sentiment_labels.py --run-dir fixtures/examples/runs/sentiment-labels
 autumn run fixtures/examples/json_ticket_router.py --run-dir fixtures/examples/runs/json-ticket-router
+autumn run fixtures/examples/priority_triage.py --run-dir fixtures/examples/runs/priority-triage
+autumn run fixtures/examples/product_slugs.py --run-dir fixtures/examples/runs/product-slugs
+autumn run fixtures/examples/status_csv.py --run-dir fixtures/examples/runs/status-csv
 ```
 
 Inside the Autumn command bar, the same examples can be launched with:
@@ -18,6 +21,9 @@ Inside the Autumn command bar, the same examples can be launched with:
 gepa fixtures/examples/uppercase_words.py --run-dir fixtures/examples/runs/uppercase-words
 gepa fixtures/examples/sentiment_labels.py --run-dir fixtures/examples/runs/sentiment-labels
 gepa fixtures/examples/json_ticket_router.py --run-dir fixtures/examples/runs/json-ticket-router
+gepa fixtures/examples/priority_triage.py --run-dir fixtures/examples/runs/priority-triage
+gepa fixtures/examples/product_slugs.py --run-dir fixtures/examples/runs/product-slugs
+gepa fixtures/examples/status_csv.py --run-dir fixtures/examples/runs/status-csv
 ```
 
 The `runs/` subdirectory is ignored by git so demo output can stay local.
