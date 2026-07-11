@@ -9,18 +9,35 @@ from autumn.models import CatalogEntry
 
 
 def _summary(entries: list[CatalogEntry]) -> str:
-    if not entries:
+    # Disabled (stub) rows -- e.g. Anthropic/OpenAI, #15 -- are always
+    # present but were never "installed" and can never become the default,
+    # so they're excluded from this count; otherwise a fresh install with
+    # zero real models would misleadingly claim some are installed.
+    selectable = [entry for entry in entries if not entry.disabled]
+    if not selectable:
         return "No local models installed. Use `autumn models install` to add one."
-    count = len(entries)
+    count = len(selectable)
     noun = "model" if count == 1 else "models"
-    default = next((entry.name for entry in entries if entry.is_default), "--")
+    default = next((entry.name for entry in selectable if entry.is_default), "--")
     return f"{count} installed {noun} | Default: {default} | Press d to set highlighted default"
 
 
 def _row(entry: CatalogEntry) -> str:
     marker = "*" if entry.is_default else " "
     context = f" | ctx {entry.context_window}" if entry.context_window is not None else ""
-    return f"{marker} {entry.name} | {entry.backend}{context}"
+    text = f"{marker} {entry.name} | {entry.backend}{context}"
+    if entry.disabled:
+        # Tree labels accept Rich markup (see `Tree.process_label`), so a
+        # plain-text row wrapped in `[dim]...[/dim]` renders visibly grayed
+        # out without needing a bespoke widget/CSS class per row.
+        return f"[dim]{text} (not available yet)[/dim]"
+    return text
+
+
+def _group_label(group_name: str, group_entries: list[CatalogEntry]) -> str:
+    if group_entries and all(entry.disabled for entry in group_entries):
+        return f"[dim]{group_name}[/dim]"
+    return group_name
 
 
 def _grouped(entries: list[CatalogEntry]) -> list[tuple[str, list[CatalogEntry]]]:
@@ -70,7 +87,7 @@ class ModelCatalogView(Vertical):
         tree = self.query_one("#model-tree", Tree)
         tree.clear()
         for group_name, group_entries in _grouped(self._entries):
-            group_node = tree.root.add(group_name, expand=True)
+            group_node = tree.root.add(_group_label(group_name, group_entries), expand=True)
             for entry in group_entries:
                 group_node.add_leaf(_row(entry), data=entry)
 
