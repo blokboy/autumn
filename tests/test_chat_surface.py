@@ -10,7 +10,6 @@ from autumn.app import AutumnApp
 from autumn.local_model_runner import LocalModelRuntimeError
 from autumn.models import (
     ChatMessage,
-    LocalModel,
     PromptRoutingPolicy,
     ProviderAccount,
     ProviderModel,
@@ -106,10 +105,10 @@ async def test_prompt_receives_async_installed_model_reply(tmp_path):
     local_models.install_model(catalog_root, name="tiny", source_path=source_model)
 
     class FakeLocalModelRunner:
-        def generate(self, messages: list[ChatMessage], model: LocalModel) -> ChatMessage:
+        def generate_stream(self, messages, model, *, on_chunk, cancel_event=None):
             assert messages == [ChatMessage(role="user", text="hello")]
             assert model.name == "tiny"
-            return ChatMessage(role="assistant", text="Installed model answered.", model=model.name)
+            on_chunk("Installed model answered.")
 
     app = AutumnApp(
         runs_root=tmp_path,
@@ -141,14 +140,15 @@ async def test_prompt_receives_async_installed_model_reply(tmp_path):
         assert "Autumn [tiny]: Installed model answered." in str(chat_text)
 
 
-async def test_prompt_falls_back_when_installed_model_runtime_fails(tmp_path):
+async def test_prompt_local_model_runtime_error_preserves_partial_text_with_interrupted_marker(tmp_path):
     source_model = tmp_path / "source.gguf"
     source_model.write_bytes(b"fake gguf")
     catalog_root = tmp_path / "models"
     local_models.install_model(catalog_root, name="tiny", source_path=source_model)
 
     class FailingLocalModelRunner:
-        def generate(self, messages: list[ChatMessage], model: LocalModel) -> ChatMessage:
+        def generate_stream(self, messages, model, *, on_chunk, cancel_event=None):
+            on_chunk("partial answer")
             raise LocalModelRuntimeError("tiny failed: bad model file")
 
     app = AutumnApp(
@@ -171,16 +171,20 @@ async def test_prompt_falls_back_when_installed_model_runtime_fails(tmp_path):
         await pilot.press("enter")
         await pilot.pause(0.2)
 
+        # No silent fallback substitution (matching #13's Groq behavior): the
+        # model is still the real installed local model, and the partial
+        # text that streamed in before the crash is kept, not discarded.
         assert app.chat_messages == [
             ChatMessage(role="user", text="hello"),
             ChatMessage(
                 role="assistant",
-                text="Offline local response: hello",
-                model="autumn/offline-tiny",
+                text="partial answer [interrupted: tiny failed: bad model file]",
+                model="tiny",
             ),
         ]
         status_text = app.screen.query_one("#chat-model-status", Static).content
-        assert "Fallback: autumn/offline-tiny (tiny failed: bad model file)" in str(status_text)
+        assert "Model: tiny (installed default)" in str(status_text)
+        assert "autumn/offline-tiny" not in str(status_text)
 
 
 async def test_prompt_preserves_selected_model_error_response_without_fallback(tmp_path):
@@ -190,12 +194,8 @@ async def test_prompt_preserves_selected_model_error_response_without_fallback(t
     local_models.install_model(catalog_root, name="tiny", source_path=source_model)
 
     class ErrorResponseLocalModelRunner:
-        def generate(self, messages: list[ChatMessage], model: LocalModel) -> ChatMessage:
-            return ChatMessage(
-                role="assistant",
-                text="Error: context window exceeded",
-                model=model.name,
-            )
+        def generate_stream(self, messages, model, *, on_chunk, cancel_event=None):
+            on_chunk("Error: context window exceeded")
 
     app = AutumnApp(
         runs_root=tmp_path,
