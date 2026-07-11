@@ -26,6 +26,8 @@ def _row(entry: CatalogEntry) -> str:
     marker = "*" if entry.is_default else " "
     context = f" | ctx {entry.context_window}" if entry.context_window is not None else ""
     text = f"{marker} {entry.name} | {entry.backend}{context}"
+    if entry.status == "downloading":
+        text += " (downloading...)"
     if entry.disabled:
         # Tree labels accept Rich markup (see `Tree.process_label`), so a
         # plain-text row wrapped in `[dim]...[/dim]` renders visibly grayed

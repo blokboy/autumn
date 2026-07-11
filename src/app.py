@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import httpx
 from textual.app import App
 from textual.theme import Theme
 
@@ -22,6 +23,7 @@ import queue_store
 import runner
 import subagent
 from cli import LaunchSpec, LaunchSpecError, parse_command_line
+from curated_models import CuratedModel
 from dashboard_callback import DashboardCallback
 from fixtures import dry_run_events
 from groq_runner import GroqRunner, GroqRuntimeError
@@ -126,6 +128,18 @@ def _subagent_fallback_warning_text(
         f"fallback provides [{_format_capability_list(warning.fallback_capabilities)}]; "
         f"lost [{_format_capability_list(warning.lost_capabilities)}]."
     )
+
+
+def _download_status_text(
+    entry: CuratedModel, index: int, total: int, percent: int | None = None
+) -> str:
+    """Command-bar status line for a background model download (#20) --
+    e.g. "Downloading Llama 3.2 3B Instruct (2 of 3)... 42%"."""
+    label = f"Downloading {entry.name}"
+    if total > 1:
+        label += f" ({index + 1} of {total})"
+    label += f"... {percent}%" if percent is not None else "..."
+    return label
 
 
 def _append_stream_marker(text: str, marker: str) -> str:
@@ -259,8 +273,15 @@ class AutumnApp(App):
         self._prompt_routing_policy = prompt_routing_policy
         # None means "use model_downloader's real Hugging Face download";
         # tests inject a fake here to avoid real network calls from
-        # ModelDownloadScreen.
+        # start_background_model_download's background thread.
         self._model_download_fn = model_download_fn
+        # Command-bar status text for whichever background model download(s)
+        # start_background_model_download (#20) currently has in flight, or
+        # None when nothing is downloading -- threaded through every
+        # DashboardScreen construction (same pattern as _chat_model_status)
+        # so it survives screen swaps, and pushed to an already-mounted
+        # screen via _refresh_download_status_display.
+        self._download_status: str | None = None
 
         # Launch mode iff both run_name and run_dir are given (cli.py's `run`
         # subcommand always supplies both together); otherwise this is
@@ -308,6 +329,7 @@ class AutumnApp(App):
                 chat_model_status=self._chat_model_status,
                 model_catalog_root=self._model_catalog_root,
                 prompt_routing_policy=self._prompt_routing_policy,
+                download_status=self._download_status,
             )
             self.push_screen(self._dashboard_screen)
             if self.pending_queue:
@@ -369,6 +391,7 @@ class AutumnApp(App):
                     chat_model_status=self._chat_model_status,
                     model_catalog_root=self._model_catalog_root,
                     prompt_routing_policy=self._prompt_routing_policy,
+                    download_status=self._download_status,
                 )
                 self.push_screen(self._dashboard_screen)
                 # DashboardScreen mounts asynchronously -- _advance_queue's
@@ -412,9 +435,9 @@ class AutumnApp(App):
         than pushed on top of it -- there's nothing to go "back" to.
 
         `initial_tab` lets a caller land on a specific tab instead of the
-        default first one -- used by `finish_model_download` to open on the
-        Models tab when multiple models were just installed and there's no
-        unambiguous default to pick for the user."""
+        default first one -- used by `start_background_model_download` to
+        open on the Models tab when more than one model was just picked and
+        there's no unambiguous default to show the user yet."""
         self._dashboard_screen = DashboardScreen(
             self.runs_root,
             chat_messages=self.chat_messages,
@@ -422,6 +445,7 @@ class AutumnApp(App):
             model_catalog_root=self._model_catalog_root,
             prompt_routing_policy=self._prompt_routing_policy,
             initial_tab=initial_tab,
+            download_status=self._download_status,
         )
         self.switch_screen(self._dashboard_screen)
 
@@ -446,17 +470,119 @@ class AutumnApp(App):
             return
         self.notify(f"Default model set to {name}", severity="information")
 
-    def finish_model_download(self, *, focus_models_tab: bool = False) -> None:
-        """ModelDownloadScreen's success path: continues into the dashboard
-        exactly like InputScreen's empty-Enter path (`enter_browse_mode`).
+    def start_background_model_download(self, entries: list[CuratedModel]) -> None:
+        """ModelPickerScreen's confirm path (#20): registers every picked
+        entry as a "downloading" placeholder in the local catalog
+        synchronously (see `local_models.mark_downloading`) -- so
+        `model_router.choose_model` already knows there's a default chosen
+        but not yet runnable, and a relaunch mid-download won't re-show the
+        picker (`list_models` is already non-empty) -- then enters the
+        dashboard immediately, exactly like InputScreen's empty-Enter path
+        (`enter_browse_mode`), and downloads/installs `entries` one at a
+        time on a background thread. No blocking progress screen in
+        between: the command bar's download-status line (see
+        `_set_download_status`) is the only visible sign a download is
+        still in flight.
 
-        `focus_models_tab` is set when more than one model was just
-        downloaded -- the first one installed becomes the default
-        automatically (`local_models.install_model`'s empty-catalog rule),
-        but with several newly-installed models to choose from, landing on
-        the Models tab lets the user confirm/change that pick instead of it
-        being silently implicit."""
-        self.enter_browse_mode(initial_tab="models-tab" if focus_models_tab else None)
+        More than one entry lands on the Models tab (same rationale
+        `enter_browse_mode`'s docstring gives): the first picked becomes the
+        eventual default (mirrors `local_models.install_model`'s
+        empty-catalog rule, applied here to pick order since nothing is
+        actually installed yet), but with several in flight, landing on the
+        Models tab lets the user see/confirm that instead of it being
+        silently implicit."""
+        for entry in entries:
+            local_models.mark_downloading(
+                self._model_catalog_root, name=entry.name, context_window=entry.context_window
+            )
+        self._download_status = _download_status_text(entries[0], 0, len(entries))
+        self.enter_browse_mode(initial_tab="models-tab" if len(entries) > 1 else None)
+        # DashboardScreen mounts asynchronously -- the initial download
+        # status is already baked into its compose (via the download_status
+        # constructor arg above), but the background thread's later
+        # call_from_thread updates go through _dashboard_screen.
+        # refresh_download_status, which needs CommandBar already mounted
+        # (query_one), so starting the thread waits for that mount to land
+        # rather than racing it (same idiom on_result uses for
+        # _advance_queue above).
+        self.call_after_refresh(self._start_model_download_thread, entries)
+
+    def _start_model_download_thread(self, entries: list[CuratedModel]) -> None:
+        threading.Thread(
+            target=self._download_models_in_background, args=(entries,), daemon=True
+        ).start()
+
+    def _set_download_status(self, text: str | None) -> None:
+        self._download_status = text
+        self._refresh_download_status_display()
+
+    def _refresh_download_status_display(self) -> None:
+        if hasattr(self, "_dashboard_screen"):
+            self._dashboard_screen.refresh_download_status(self._download_status)
+
+    def _refresh_models_display(self) -> None:
+        if hasattr(self, "_dashboard_screen"):
+            self._dashboard_screen.refresh_models()
+
+    def _on_model_download_progress(
+        self,
+        entry: CuratedModel,
+        index: int,
+        total: int,
+        downloaded: int,
+        total_bytes: int | None,
+    ) -> None:
+        if not total_bytes:
+            return
+        percent = min(100, int(downloaded * 100 / total_bytes))
+        self.call_from_thread(
+            self._set_download_status, _download_status_text(entry, index, total, percent)
+        )
+
+    def _on_model_download_failure(
+        self, entry: CuratedModel, detail: str, remaining: list[CuratedModel]
+    ) -> None:
+        """A background download failed (#20): mirrors the message the old
+        blocking ModelDownloadScreen showed, but notifies instead of falling
+        back to a screen -- chat/other interaction was never blocked in the
+        first place. Removes the failed entry's "downloading" placeholder
+        (and any not-yet-attempted entries queued after it, since this
+        entry's failure stops the rest of the chain, same as the old
+        blocking flow) so no permanently-stuck "downloading" ghost entry is
+        left behind; whatever installed successfully before this failure
+        stays installed untouched."""
+        local_models.remove_model(self._model_catalog_root, entry.name)
+        for queued in remaining:
+            local_models.remove_model(self._model_catalog_root, queued.name)
+        self.notify(f"Couldn't install {entry.name}: {detail}", severity="error")
+        self._set_download_status(None)
+        self._refresh_models_display()
+
+    def _on_model_downloads_complete(self) -> None:
+        self._set_download_status(None)
+        self._refresh_models_display()
+
+    def _download_models_in_background(self, entries: list[CuratedModel]) -> None:
+        total = len(entries)
+        for index, entry in enumerate(entries):
+            self.call_from_thread(
+                self._set_download_status, _download_status_text(entry, index, total)
+            )
+            try:
+                model_downloader.download_and_install(
+                    self._model_catalog_root,
+                    entry,
+                    on_progress=lambda downloaded, total_bytes, e=entry, i=index: (
+                        self._on_model_download_progress(e, i, total, downloaded, total_bytes)
+                    ),
+                    download_file_fn=self._model_download_fn,
+                )
+            except (httpx.HTTPError, OSError) as exc:
+                self.call_from_thread(
+                    self._on_model_download_failure, entry, str(exc), entries[index + 1 :]
+                )
+                return
+        self.call_from_thread(self._on_model_downloads_complete)
 
     def _append_user_prompt(self, text: str) -> ChatMessage:
         message = ChatMessage(role="user", text=text)
@@ -946,6 +1072,7 @@ class AutumnApp(App):
             model_catalog_root=self._model_catalog_root,
             prompt_routing_policy=self._prompt_routing_policy,
             initial_tab="chat-tab",
+            download_status=self._download_status,
         )
         self.switch_screen(self._dashboard_screen)
         self.call_after_refresh(
@@ -985,6 +1112,7 @@ class AutumnApp(App):
             chat_model_status=self._chat_model_status,
             model_catalog_root=self._model_catalog_root,
             prompt_routing_policy=self._prompt_routing_policy,
+            download_status=self._download_status,
         )
         self.switch_screen(self._dashboard_screen)
         self._start_live_run()

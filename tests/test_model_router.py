@@ -264,6 +264,66 @@ def test_router_prefers_explicit_provider_default_over_non_default_local_model(t
     assert choice.reason == "provider available"
 
 
+def test_router_falls_through_when_default_model_is_still_downloading(tmp_path):
+    """#20: a picked-but-not-yet-installed default (LocalModel.status ==
+    "downloading") must be treated as unavailable even when the injected
+    `is_runtime_available` would say yes -- the file genuinely doesn't exist
+    on disk yet, so choose_model can't trust that check for this entry."""
+    model_path = tmp_path / "models" / "pending" / "pending.gguf"
+    choice = model_router.choose_model(
+        prompt="hello",
+        catalog_root=tmp_path / "models",
+        available_models=[
+            LocalModel(
+                name="pending",
+                backend="llama.cpp",
+                path=model_path,
+                context_window=2048,
+                is_default=True,
+                status="downloading",
+            )
+        ],
+        is_runtime_available=lambda model: True,
+    )
+
+    assert choice.name == "autumn/offline-tiny"
+    assert choice.backend == "builtin"
+    assert choice.path is None
+    assert choice.reason == "pending is still downloading"
+
+
+def test_router_uses_another_runnable_local_model_while_default_is_still_downloading(tmp_path):
+    pending_path = tmp_path / "models" / "pending" / "pending.gguf"
+    spare_path = tmp_path / "models" / "spare" / "spare.gguf"
+    choice = model_router.choose_model(
+        prompt="hello",
+        catalog_root=tmp_path / "models",
+        available_models=[
+            LocalModel(
+                name="pending",
+                backend="llama.cpp",
+                path=pending_path,
+                context_window=2048,
+                is_default=True,
+                status="downloading",
+            ),
+            LocalModel(
+                name="spare",
+                backend="llama.cpp",
+                path=spare_path,
+                context_window=4096,
+                is_default=False,
+                status="installed",
+            ),
+        ],
+        is_runtime_available=lambda model: True,
+    )
+
+    assert choice.name == "spare"
+    assert choice.backend == "llama.cpp"
+    assert choice.reason == "installed local"
+
+
 def test_router_preserves_default_unavailable_reason_when_all_local_models_are_unusable(tmp_path):
     default_path = tmp_path / "models" / "default" / "default.gguf"
     spare_path = tmp_path / "models" / "spare" / "spare.gguf"

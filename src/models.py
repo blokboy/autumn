@@ -73,13 +73,25 @@ class ChatMessage:
 
 @dataclass
 class LocalModel:
-    """A model installed into Autumn's managed local catalog."""
+    """A model installed into Autumn's managed local catalog.
+
+    `status` is "installed" for a model whose file is actually on disk and
+    usable, or "downloading" for a placeholder registered by
+    `local_models.mark_downloading` while a background first-run download
+    (#20) is still in flight -- occupying a catalog slot (so the picker
+    doesn't reappear and a default can already be recorded) without yet
+    being a runnable model. `model_router.choose_model` treats a
+    "downloading" entry as unavailable and falls through, same spirit as a
+    missing runtime. `model_downloader.download_and_install`'s call into
+    `install_model` once the download finishes replaces the placeholder
+    outright (same name -> overwritten), flipping it back to "installed"."""
 
     name: str
     backend: str
     path: Path
     context_window: int | None = None
     is_default: bool = False
+    status: Literal["installed", "downloading"] = "installed"
 
 
 @dataclass
@@ -136,6 +148,7 @@ class CatalogEntry:
     account_id: str | None = None
     is_default: bool = False
     disabled: bool = False
+    status: Literal["installed", "downloading"] = "installed"
 
 
 @dataclass

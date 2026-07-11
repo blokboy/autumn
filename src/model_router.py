@@ -52,12 +52,22 @@ def _availability(entry: CatalogEntry, runtime_available: RuntimeAvailability) -
         # this provider model enabled and its account signed in.
         return True, "provider available"
 
+    if entry.status == "downloading":
+        # A picked-but-not-yet-installed model from the background first-run
+        # download (#20, see local_models.mark_downloading) -- "default
+        # chosen but not yet runnable". Falls through the candidate chain
+        # exactly like a missing runtime below, checked ahead of (and
+        # independent from) `runtime_available` since a downloading model's
+        # path doesn't exist yet regardless of what that check would say.
+        return False, f"{entry.name} is still downloading"
+
     model = LocalModel(
         name=entry.name,
         backend=entry.backend,
         path=entry.path,
         context_window=entry.context_window,
         is_default=entry.is_default,
+        status=entry.status,
     )
     if runtime_available(model):
         return True, "installed default" if entry.is_default else "installed local"

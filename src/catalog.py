@@ -52,6 +52,7 @@ def _local_entry(model: LocalModel) -> CatalogEntry:
         path=model.path,
         context_window=model.context_window,
         is_default=model.is_default,
+        status=model.status,
     )
 
 
