@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from textual.widgets import Label, ListView
+from textual.widgets import SelectionList
 
 from autumn import local_models
 from autumn.app import AutumnApp
@@ -25,11 +25,11 @@ async def test_empty_catalog_shows_model_picker_first(tmp_path):
         await pilot.pause()
 
         assert isinstance(app.screen, ModelPickerScreen)
-        list_view = app.screen.query_one(ListView)
-        assert len(list_view) == len(CURATED_MODELS)
+        selection_list = app.screen.query_one(SelectionList)
+        assert selection_list.option_count == len(CURATED_MODELS)
 
         first = CURATED_MODELS[0]
-        row_text = str(app.screen.query(Label)[1].content)
+        row_text = str(selection_list.get_option_at_index(0).prompt)
         assert first.name in row_text
         assert first.vendor in row_text
         assert "GB" in row_text
@@ -80,6 +80,21 @@ async def test_skipped_picker_reappears_on_next_launch(tmp_path):
         assert isinstance(relaunched.screen, ModelPickerScreen)
 
 
+async def test_enter_with_nothing_selected_skips_like_escape(tmp_path):
+    catalog_root = tmp_path / "models"
+    app = AutumnApp(runs_root=tmp_path, model_catalog_root=catalog_root)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ModelPickerScreen)
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, InputScreen)
+        assert local_models.list_models(catalog_root) == []
+
+
 async def test_picking_a_model_downloads_installs_and_enters_dashboard(tmp_path):
     catalog_root = tmp_path / "models"
     app = AutumnApp(
@@ -92,6 +107,7 @@ async def test_picking_a_model_downloads_installs_and_enters_dashboard(tmp_path)
         await pilot.pause()
         assert isinstance(app.screen, ModelPickerScreen)
 
+        await pilot.press("space")
         await pilot.press("enter")
         await pilot.pause(0.2)
 
@@ -111,6 +127,7 @@ async def test_installed_picker_model_never_reappears(tmp_path):
     )
     async with app.run_test() as pilot:
         await pilot.pause()
+        await pilot.press("space")
         await pilot.press("enter")
         await pilot.pause(0.2)
 
@@ -119,3 +136,37 @@ async def test_installed_picker_model_never_reappears(tmp_path):
         await pilot.pause()
 
         assert isinstance(relaunched.screen, InputScreen)
+
+
+async def test_picking_multiple_models_downloads_installs_all_and_focuses_models_tab(tmp_path):
+    catalog_root = tmp_path / "models"
+    app = AutumnApp(
+        runs_root=tmp_path,
+        model_catalog_root=catalog_root,
+        model_download_fn=_fake_download_file,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ModelPickerScreen)
+
+        # Check the first two rows (space toggles, down moves the highlight).
+        await pilot.press("space")
+        await pilot.press("down")
+        await pilot.press("space")
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert isinstance(app.screen, DashboardScreen)
+        installed_names = {model.name for model in local_models.list_models(catalog_root)}
+        assert installed_names == {CURATED_MODELS[0].name, CURATED_MODELS[1].name}
+
+        # First selected becomes the default (install_model's empty-catalog rule).
+        default = local_models.get_default(catalog_root)
+        assert default is not None
+        assert default.name == CURATED_MODELS[0].name
+
+        # Ambiguous default (two freshly-installed models) -> land on Models tab.
+        from textual.widgets import TabbedContent
+
+        assert app.screen.query_one(TabbedContent).active == "models-tab"

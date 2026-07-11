@@ -160,9 +160,12 @@ no separate "have we onboarded before" flag. Skipping just means "not now";
 it reappears next launch since the catalog is still empty. Installing any
 one model (via the picker or manually) makes it stop appearing.
 
-**Selection**: pick exactly **one** of five curated models to download (not
-multi-select) — GGUF files are multi-GB, and getting to a working default
-fast matters more than front-loading every option.
+**Selection**: multi-select (checkbox list) over the five curated models —
+downloads happen one at a time in the order picked. The first one installed
+becomes the default (existing empty-catalog rule in
+`local_models.install_model`); picking more than one lands on the Models tab
+afterward instead of silently accepting that pick, since it's no longer the
+only model in the catalog.
 
 **Curated list** (small, 1–4GB Q4_K_M GGUF, one per vendor):
 

@@ -311,17 +311,23 @@ class AutumnApp(App):
             )
             runner.launch(self._dashboard_callback, spec)
 
-    def enter_browse_mode(self) -> None:
+    def enter_browse_mode(self, *, initial_tab: str | None = None) -> None:
         """InputScreen's empty-Enter path: the same bare-browse DashboardScreen
         `_browse()`'s launch-mode-free `AutumnApp` construction produces (no
         live_state), swapped in for InputScreen with `switch_screen` rather
-        than pushed on top of it -- there's nothing to go "back" to."""
+        than pushed on top of it -- there's nothing to go "back" to.
+
+        `initial_tab` lets a caller land on a specific tab instead of the
+        default first one -- used by `finish_model_download` to open on the
+        Models tab when multiple models were just installed and there's no
+        unambiguous default to pick for the user."""
         self._dashboard_screen = DashboardScreen(
             self.runs_root,
             chat_messages=self.chat_messages,
             chat_model_status=self._chat_model_status,
             model_catalog_root=self._model_catalog_root,
             prompt_routing_policy=self._prompt_routing_policy,
+            initial_tab=initial_tab,
         )
         self.switch_screen(self._dashboard_screen)
 
@@ -340,12 +346,17 @@ class AutumnApp(App):
         catalog.set_default(self._model_catalog_root, group, name)
         self.notify(f"Default model set to {name}", severity="information")
 
-    def finish_model_download(self) -> None:
-        """ModelDownloadScreen's success path: the freshly-installed model
-        is already the catalog default (first model installed), so this
-        just continues into the dashboard exactly like InputScreen's
-        empty-Enter path (`enter_browse_mode`)."""
-        self.enter_browse_mode()
+    def finish_model_download(self, *, focus_models_tab: bool = False) -> None:
+        """ModelDownloadScreen's success path: continues into the dashboard
+        exactly like InputScreen's empty-Enter path (`enter_browse_mode`).
+
+        `focus_models_tab` is set when more than one model was just
+        downloaded -- the first one installed becomes the default
+        automatically (`local_models.install_model`'s empty-catalog rule),
+        but with several newly-installed models to choose from, landing on
+        the Models tab lets the user confirm/change that pick instead of it
+        being silently implicit."""
+        self.enter_browse_mode(initial_tab="models-tab" if focus_models_tab else None)
 
     def _append_user_prompt(self, text: str) -> ChatMessage:
         message = ChatMessage(role="user", text=text)

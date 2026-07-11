@@ -50,18 +50,59 @@ restructure the Models tab into a grouped/tree view.
 
 **What to build:** Real, working (non-streaming) chat completions from
 Groq's free tier, gated on `GROQ_API_KEY`, as the first functional provider
-entry in the unified catalog.
+entry in the unified catalog. Tracks the overall vertical slice; split into
+three sub-tickets (#16-#18) below so the runtime and catalog-gating work can
+proceed in parallel, converging into one integration step.
 
 **Blocked by:** #11
 
+### Groq: provider runtime (non-streaming chat completion) — [#16](https://github.com/blokboy/autumn/issues/16)
+
+SDK-wrapping only, mirrors `LocalModelRunner`/`LocalModelRuntimeError`. No
+catalog/`app.py` dependency.
+
+**Blocked by:** None — can start immediately, in parallel with #17.
+
 - [ ] `groq` SDK added as a dependency
-- [ ] "Groq" group with 3 subrows: `llama-3.3-70b-versatile`,
-      `llama-3.1-8b-instant`, `gemma2-9b-it`
-- [ ] Unavailable (falls through chain) when `GROQ_API_KEY` unset
-- [ ] Real completion returned when set as default and key present
-- [ ] API/network errors fall through the chain rather than crashing
-- [ ] Tests: chosen w/ key, falls through w/o key, falls through on API
-      error, no live network calls in test suite
+- [ ] `GroqRunner.generate(messages, model) -> ChatMessage`, non-streaming,
+      client injectable at construction for test mocking
+- [ ] API/network errors raise a `GroqRuntimeError` (mirrors
+      `LocalModelRuntimeError`)
+- [ ] Tests: successful completion, `GroqRuntimeError` on API/SDK error, no
+      live network calls (injected fake client)
+
+### Groq: catalog policy gated on GROQ_API_KEY — [#17](https://github.com/blokboy/autumn/issues/17)
+
+Catalog-visibility/gating only — builds the real `PromptRoutingPolicy` and
+wires it into `AutumnApp` construction (today it's always `None`). No
+SDK/network dependency.
+
+**Blocked by:** None — can start immediately, in parallel with #16.
+
+- [ ] Policy builder producing a `groq` `ProviderAccount` + 3
+      `ProviderModel` rows: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`,
+      `gemma2-9b-it`
+- [ ] `is_signed_in` gated on `GROQ_API_KEY` being set
+- [ ] `cli.py` builds and passes this policy so the "Groq" group actually
+      appears in the Models tab
+- [ ] Tests: entries present w/ key, absent/excluded w/o key, catalog
+      reflects both via `catalog.build_entries`
+
+### Groq: wire runtime + policy into chat-answer path — [#18](https://github.com/blokboy/autumn/issues/18)
+
+Integration step — replaces `app.py`'s hardcoded provider stub with a real
+call into #16's runner for Groq choices produced via #17's policy.
+
+**Blocked by:** #16, #17
+
+- [ ] Groq `ModelChoice` triggers a real call into #16's runner from
+      `_answer_prompt_async`
+- [ ] `GroqRuntimeError` falls through to offline-tiny (mirrors the existing
+      `LocalModelRuntimeError` catch)
+- [ ] Non-Groq provider choices (Anthropic/OpenAI) keep today's "not
+      executable yet" stub unchanged
+- [ ] Tests (end-to-end): chosen w/ default + key present, falls through
+      w/o key, falls through on simulated API error, no live network calls
 
 ## Groq: streaming + cancel + mid-stream error handling — [#13](https://github.com/blokboy/autumn/issues/13)
 

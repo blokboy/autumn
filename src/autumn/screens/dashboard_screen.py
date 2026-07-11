@@ -74,6 +74,7 @@ class DashboardScreen(Screen):
         chat_model_status: str | None = None,
         model_catalog_root: Path | None = None,
         prompt_routing_policy: PromptRoutingPolicy | None = None,
+        initial_tab: str | None = None,
         *args,
         **kwargs,
     ) -> None:
@@ -81,6 +82,7 @@ class DashboardScreen(Screen):
         self._runs_root = Path(runs_root)
         self._model_catalog_root = model_catalog_root
         self._prompt_routing_policy = prompt_routing_policy
+        self._initial_tab = initial_tab
         self._live_state = live_state
         self._live_run_dir = live_state.run_dir if live_state is not None else None
         self._summaries = registry.merge_live(registry.scan(self._runs_root), live_state)
@@ -102,7 +104,7 @@ class DashboardScreen(Screen):
     def compose(self) -> ComposeResult:
         with Horizontal():
             yield RunSidebar(self._summaries, live_state=self._live_state, id="sidebar")
-            with TabbedContent():
+            with TabbedContent(initial=self._initial_tab or ""):
                 yield TabPane("Overview", OverviewPane(self._displayed_state, id="overview"))
                 yield TabPane("Candidates", CandidatesTable(self._displayed_state, id="candidates"))
                 yield TabPane("Log", LogView(self._displayed_state, id="log"))
