@@ -31,7 +31,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-import anthropic_policy, credentials, groq_policy, local_models, openai_policy, paths, registry
+import anthropic_policy, config, credentials, groq_policy, local_models, openai_policy, paths, registry
 from models import PromptRoutingPolicy
 
 _GEPA_PREFIX = "gepa "
@@ -299,6 +299,24 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     keys_remove_parser.add_argument("provider", choices=_KNOWN_PROVIDERS, help="Provider to remove the stored key for.")
 
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Manage Autumn user preferences.",
+    )
+    config_subparsers = config_parser.add_subparsers(dest="config_command")
+
+    config_set_parser = config_subparsers.add_parser(
+        "set",
+        help="Persist a user preference.",
+    )
+    config_set_parser.add_argument("name", choices=config.CONFIG_KEYS, help="Preference to update.")
+    config_set_parser.add_argument("value", help="Preference value.")
+
+    config_subparsers.add_parser(
+        "show",
+        help="Show current user preferences.",
+    )
+
     return parser
 
 
@@ -491,6 +509,34 @@ def _keys(args: argparse.Namespace) -> int:
     return 1
 
 
+def _config(args: argparse.Namespace) -> int:
+    command = args.config_command
+
+    if command == "set":
+        try:
+            if args.name == config.SEARCH_MODE_KEY:
+                config.set_search_mode(args.value)
+            elif args.name == config.ACTION_MODE_KEY:
+                config.set_action_mode(args.value)
+            else:
+                print(f"unknown config key: {args.name}")
+                return 1
+        except config.ConfigError as exc:
+            print(str(exc))
+            return 1
+        print(f"{args.name}: {args.value}")
+        return 0
+
+    if command == "show":
+        values = config.as_dict()
+        for name in config.CONFIG_KEYS:
+            print(f"{name}: {values[name]}")
+        return 0
+
+    print("config command required")
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -512,6 +558,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "keys":
         return _keys(args)
+
+    if args.command == "config":
+        return _config(args)
 
     parser.print_help()
     return 1

@@ -7,12 +7,14 @@ from typing import Any, Callable, Protocol
 
 import groq
 
+import config
 import credentials
 import list_keys
 import list_models
 import list_runs
 import paths
 import search_docs
+import search_web
 import system_tools
 from models import ChatMessage, ToolCitation
 
@@ -37,13 +39,20 @@ ConfirmFn = Callable[[str, float], bool]
 # five mutating tools from `system_tools.py` are always offered too, but each
 # one is confirmation-gated (see `_execute_tool_call`/`_execute_mutating_tool`)
 # rather than executing immediately like the read-only ones.
-_TOOLS: list[dict[str, Any]] = [
+_ALWAYS_OFFERED_TOOLS: list[dict[str, Any]] = [
     search_docs.TOOL_SCHEMA,
     list_models.TOOL_SCHEMA,
     list_keys.TOOL_SCHEMA,
     list_runs.TOOL_SCHEMA,
     *[tool.schema for tool in system_tools.MUTATING_TOOLS],
 ]
+
+# Backwards-compatible name for tests and callers that assert the baseline
+# always-offered set. `search_web` is intentionally absent here because it is
+# offered per-turn by `_tools_for_turn`.
+_TOOLS = _ALWAYS_OFFERED_TOOLS
+
+_SEARCH_WEB_PREFIX = "/search "
 
 _MUTATING_TOOLS_BY_NAME: dict[str, system_tools.MutatingTool] = {
     tool.name: tool for tool in system_tools.MUTATING_TOOLS
@@ -56,6 +65,7 @@ _MUTATING_TOOLS_BY_NAME: dict[str, system_tools.MutatingTool] = {
 # renders whatever string it's given.
 _TOOL_STATUS_LABELS: dict[str, str] = {
     search_docs.TOOL_NAME: "Searching docs",
+    search_web.TOOL_NAME: "Searching the web",
 }
 
 # name -> callable returning the citation source labels for a *successful*
@@ -66,6 +76,7 @@ _TOOL_CITATION_EXTRACTORS: dict[str, Callable[[dict[str, Any], Path | None], lis
     search_docs.TOOL_NAME: lambda arguments, docs_root: search_docs.citations_for_tool_call(
         arguments, root=docs_root
     ),
+    search_web.TOOL_NAME: lambda arguments, docs_root: search_web.citations_for_tool_call(arguments),
 }
 
 
@@ -121,8 +132,43 @@ class GroqClient(Protocol):
     chat: _Chat
 
 
-def _to_payload(messages: list[ChatMessage]) -> list[dict[str, Any]]:
-    return [{"role": message.role, "content": message.text} for message in messages]
+def _has_explicit_search_trigger(messages: list[ChatMessage]) -> bool:
+    for message in reversed(messages):
+        if message.role == "user":
+            return message.text.strip().startswith(_SEARCH_WEB_PREFIX)
+    return False
+
+
+def _strip_explicit_search_trigger(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith(_SEARCH_WEB_PREFIX):
+        return stripped[len(_SEARCH_WEB_PREFIX) :].strip()
+    return text
+
+
+def _to_payload(messages: list[ChatMessage], *, strip_explicit_search_trigger: bool = False) -> list[dict[str, Any]]:
+    payload = [{"role": message.role, "content": message.text} for message in messages]
+    if not strip_explicit_search_trigger:
+        return payload
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role == "user":
+            payload[index]["content"] = _strip_explicit_search_trigger(messages[index].text)
+            break
+    return payload
+
+
+def _tools_for_turn(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+    tools = list(_ALWAYS_OFFERED_TOOLS)
+    tavily_key = credentials.resolve_key("tavily", "TAVILY_API_KEY")
+    if tavily_key and (
+        config.get_search_mode() == config.SEARCH_MODE_AUTONOMOUS or _has_explicit_search_trigger(messages)
+    ):
+        tools.append(search_web.TOOL_SCHEMA)
+    return tools
+
+
+def _includes_search_web_tool(tools: list[dict[str, Any]]) -> bool:
+    return any(tool["function"]["name"] == search_web.TOOL_NAME for tool in tools)
 
 
 def _wrap_groq_error(model_name: str, exc: groq.GroqError) -> GroqRuntimeError:
@@ -168,6 +214,7 @@ class GroqRunner:
         # they need a confirmation step this dict alone can't express.
         self._tool_executors: dict[str, Callable[[dict[str, Any]], str]] = {
             search_docs.TOOL_NAME: lambda arguments: search_docs.run_tool(arguments, root=self._docs_root),
+            search_web.TOOL_NAME: search_web.run_tool,
             list_models.TOOL_NAME: lambda arguments: list_models.run_tool(
                 arguments, catalog_root=self._catalog_root
             ),
@@ -258,10 +305,12 @@ class GroqRunner:
         unaffected; only Groq's tool-calling path has anything to report
         through the two new callbacks.
         """
-        payload = _to_payload(messages)
+        tools = _tools_for_turn(messages)
+        strip_search_trigger = _has_explicit_search_trigger(messages) and _includes_search_web_tool(tools)
+        payload = _to_payload(messages, strip_explicit_search_trigger=strip_search_trigger)
 
         try:
-            decision = self._client.chat.completions.create(model=model_name, messages=payload, tools=_TOOLS)
+            decision = self._client.chat.completions.create(model=model_name, messages=payload, tools=tools)
         except groq.GroqError as exc:
             raise _wrap_groq_error(model_name, exc) from exc
 
@@ -373,9 +422,8 @@ class GroqRunner:
     def _execute_mutating_tool(
         self, tool: system_tools.MutatingTool, arguments: dict[str, Any]
     ) -> tuple[str, str | None]:
-        """Confirms, then executes, a mutating system tool -- always
-        confirmation-gated (see docs/prd/chat-cli-parity-tools.md; there is
-        no autonomous-mode bypass yet, that's a later ticket). Returns
+        """Executes a mutating system tool, either after confirmation or
+        immediately when `action-mode` is autonomous. Returns
         `(result_text, failure_notice)`, same shape `_execute_tool_call`
         uses for the read-only tools.
 
@@ -387,15 +435,19 @@ class GroqRunner:
         same visible-degrade contract the read-only tools' failures already
         use.
 
-        No confirmation surface wired up (`self._confirm is None`) is
-        treated the same as an explicit decline -- silently allowing a
-        mutation with no way to ask the user would be the wrong default.
+        In the default `confirm` mode, no confirmation surface wired up
+        (`self._confirm is None`) is treated the same as an explicit decline
+        -- silently allowing a mutation with no way to ask the user would be
+        the wrong default. In `autonomous` mode, the user's persisted
+        preference is the authorization, so standard and destructive tools
+        both execute immediately with no modal and no delay.
         """
-        message = tool.confirmation_message(arguments)
-        delay = 1.5 if tool.destructive else 0.0
-        confirmed = self._confirm(message, delay) if self._confirm is not None else False
-        if not confirmed:
-            return f"Declined by user: {tool.name} was not performed.", None
+        if config.get_action_mode() != config.ACTION_MODE_AUTONOMOUS:
+            message = tool.confirmation_message(arguments)
+            delay = 1.5 if tool.destructive else 0.0
+            confirmed = self._confirm(message, delay) if self._confirm is not None else False
+            if not confirmed:
+                return f"Declined by user: {tool.name} was not performed.", None
         try:
             return system_tools.run_tool(tool.name, arguments, catalog_root=self._catalog_root), None
         except Exception as exc:

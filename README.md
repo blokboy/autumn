@@ -8,15 +8,15 @@ Inspired by [Torlink](https://github.com/baairon/torlink) and built with [Textua
 
 ## Highlights
 
-- **Live GEPA dashboard** - watch optimization runs in real time with Overview, Candidates, Log, Chat, and Models tabs.
+- **Live GEPA dashboard** - watch optimization runs in real time with Overview, Candidates, Log, Chat, Models, and Settings tabs.
 - **Historical run browser** - browse past runs from Autumn's run registry, with status, best score, candidate count, and log/candidate detail.
 - **One shared chat** - ask questions from the landing screen or dashboard command bar; the transcript is persisted and can be resumed after relaunch.
 - **Local and hosted model routing** - route prompts through local `llama.cpp` models, Groq, Anthropic, OpenAI, or the built-in `autumn/offline-tiny` fallback.
 - **First-run model picker** - choose from curated small GGUF models and let Autumn download them in the background while you enter the dashboard.
 - **Unified model catalog** - manage installed local models, provider-backed models, one default selection, and fallback behavior from the Models tab.
 - **Streaming replies and cancellation** - Groq and local `llama.cpp` replies stream into chat; press `escape` to stop an in-flight generation while keeping partial output.
-- **Chat tools for project state** - Groq-routed chat can search Autumn's own docs, list models, list configured providers, and list runs.
-- **Confirmation-gated system actions** - chat can install curated models, set defaults, and add/remove keys after explicit confirmation.
+- **Chat tools for project state and web search** - Groq-routed chat can search Autumn's own docs, search the web through Tavily, list models, list configured providers, and list runs.
+- **Configurable system actions** - chat can install curated models, set defaults, and add/remove keys after explicit confirmation, or immediately when `action-mode` is set to `autonomous`.
 - **Subagents** - run one-shot subagents from the CLI or dashboard chat, with named participants, queueing, fallback warnings, and cancellation.
 
 ## Install
@@ -82,13 +82,14 @@ Autumn monkeypatches `gepa.optimize` and `gepa.optimize_anything`, runs your scr
 
 ## Dashboard
 
-The dashboard has five main tabs:
+The dashboard has six main tabs:
 
 - **Overview** - run status, iteration/budget progress, and current best candidate.
 - **Candidates** - sortable candidate table with Pareto-front markers.
 - **Log** - streaming event log for the selected run.
 - **Chat** - shared conversation with Autumn, including model status, tool status, citations, and subagent messages.
 - **Models** - grouped catalog of local and provider models, with `d` to set the highlighted model as default.
+- **Settings** - shared CLI/dashboard preferences for web-search and system-action autonomy.
 
 The sidebar lists live and historical runs. Move through it with arrows or `j`/`k`.
 
@@ -112,6 +113,7 @@ Provider key commands:
 autumn keys add groq "$GROQ_API_KEY"
 autumn keys add anthropic "$ANTHROPIC_API_KEY"
 autumn keys add openai "$OPENAI_API_KEY"
+autumn keys add tavily "$TAVILY_API_KEY"
 autumn keys list
 autumn keys remove groq
 ```
@@ -128,17 +130,28 @@ If the selected default is unavailable, Autumn falls through the catalog and the
 
 ## Chat
 
-Chat is available from the landing screen and from the dashboard command bar. It can answer directly through the active model, or, when routed through Groq, use tool calls to inspect Autumn's project and local state.
+Chat is available from the landing screen and from the dashboard command bar. It can answer directly through the active model, or, when routed through Groq, use tool calls to inspect Autumn's project, local state, and the web.
 
 Groq-routed chat can:
 
 - Search `docs/**/*.md`, `README.md`, and `AGENTS.md`, with source citations.
+- Search the web through Tavily with `/search <question>` when a Tavily key is configured, with result URLs as citations.
 - List installed local models.
 - List which providers have configured keys without revealing key values.
 - List known GEPA runs.
-- Install curated models, set the default model, add keys, remove models, and remove keys after confirmation.
+- Install curated models, set the default model, add keys, remove models, and remove keys after confirmation by default.
 
-Destructive actions require a confirmation dialog with a short delay before the confirm button is enabled.
+Destructive actions require a confirmation dialog with a short delay before the confirm button is enabled in the default `confirm` mode. Setting `action-mode` to `autonomous` lets Groq-routed chat execute system actions immediately.
+
+Search and action autonomy are shared between the CLI and dashboard:
+
+```bash
+autumn config set search-mode explicit
+autumn config set search-mode autonomous
+autumn config set action-mode confirm
+autumn config set action-mode autonomous
+autumn config show
+```
 
 ## Subagents
 
@@ -174,6 +187,7 @@ Autumn uses XDG-style paths:
 - Runs: `$XDG_DATA_HOME/autumn/runs` or `~/.local/share/autumn/runs`
 - Models: `$XDG_DATA_HOME/autumn/models` or `~/.local/share/autumn/models`
 - Provider keys: Autumn's credentials JSON, written with `0600` permissions
+- Preferences: Autumn's config JSON, written with `0600` permissions
 
 For `llama.cpp` models, `llama-cli` must be on `PATH`, or set:
 
@@ -185,8 +199,6 @@ export AUTUMN_LLAMA_CLI=/path/to/llama-cli
 
 The current PRDs and issues point at a few active themes:
 
-- Web search through Tavily with explicit/autonomous search modes.
-- More autonomous chat controls with careful confirmation boundaries.
 - Continued hardening of curated model downloads.
 - More capable subagent workflows and run-control tools.
 

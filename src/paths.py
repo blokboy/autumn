@@ -43,6 +43,11 @@ def credentials_path() -> Path:
     return _data_root() / "credentials.json"
 
 
+def config_path() -> Path:
+    """XDG-style location for user preferences stored via `autumn config`."""
+    return _data_root() / "config.json"
+
+
 def derive_run_name(script_path: Path) -> str:
     """<script-stem>-<timestamp>, e.g. 'my_script-20260709T143200'. Timestamp format: %Y%m%dT%H%M%S (filesystem-safe, no colons)."""
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")

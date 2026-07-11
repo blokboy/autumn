@@ -19,6 +19,7 @@ import pytest
 from textual.widgets import Input, Static
 
 import search_docs
+import search_web
 from app import AutumnApp
 from groq_runner import _TOOLS, GroqRunner, GroqRuntimeError
 from models import ChatMessage, PromptRoutingPolicy, ProviderAccount, ProviderModel, ToolCitation
@@ -227,6 +228,88 @@ def test_generate_stream_sends_search_docs_schema_on_every_decide_call(tmp_path)
     assert search_docs.TOOL_SCHEMA in _TOOLS
 
 
+def test_search_web_schema_is_not_offered_without_tavily_key_even_with_trigger(tmp_path, monkeypatch):
+    monkeypatch.setattr("groq_runner.credentials.resolve_key", lambda provider, env_var: None)
+    decision = _no_tool_call_decision("hi")
+    client = _ToolCallingGroqClient(decision)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    runner.generate_stream(
+        [ChatMessage(role="user", text="/search latest autumn news")],
+        "llama-3.1-8b-instant",
+        on_chunk=lambda _: None,
+    )
+
+    [call] = client.seen_calls
+    offered_names = {tool["function"]["name"] for tool in call["tools"]}
+    assert search_web.TOOL_NAME not in offered_names
+    assert call["messages"] == [{"role": "user", "content": "/search latest autumn news"}]
+
+
+def test_search_web_schema_is_not_offered_for_plain_chat_in_explicit_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "groq_runner.credentials.resolve_key",
+        lambda provider, env_var: "tvly-test-key" if provider == "tavily" else None,
+    )
+    decision = _no_tool_call_decision("hi")
+    client = _ToolCallingGroqClient(decision)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    runner.generate_stream(
+        [ChatMessage(role="user", text="latest autumn news")],
+        "llama-3.1-8b-instant",
+        on_chunk=lambda _: None,
+    )
+
+    [call] = client.seen_calls
+    offered_names = {tool["function"]["name"] for tool in call["tools"]}
+    assert search_web.TOOL_NAME not in offered_names
+
+
+def test_search_web_schema_is_offered_for_explicit_trigger_and_payload_strips_prefix(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "groq_runner.credentials.resolve_key",
+        lambda provider, env_var: "tvly-test-key" if provider == "tavily" else None,
+    )
+    decision = _no_tool_call_decision("hi")
+    client = _ToolCallingGroqClient(decision)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    runner.generate_stream(
+        [ChatMessage(role="user", text="/search latest autumn news")],
+        "llama-3.1-8b-instant",
+        on_chunk=lambda _: None,
+    )
+
+    [call] = client.seen_calls
+    offered_names = {tool["function"]["name"] for tool in call["tools"]}
+    assert search_web.TOOL_NAME in offered_names
+    assert call["messages"] == [{"role": "user", "content": "latest autumn news"}]
+
+
+def test_search_web_schema_is_offered_for_plain_chat_in_autonomous_mode(tmp_path, monkeypatch):
+    import config
+
+    config.set_search_mode("autonomous")
+    monkeypatch.setattr(
+        "groq_runner.credentials.resolve_key",
+        lambda provider, env_var: "tvly-test-key" if provider == "tavily" else None,
+    )
+    decision = _no_tool_call_decision("hi")
+    client = _ToolCallingGroqClient(decision)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    runner.generate_stream(
+        [ChatMessage(role="user", text="latest autumn news")],
+        "llama-3.1-8b-instant",
+        on_chunk=lambda _: None,
+    )
+
+    [call] = client.seen_calls
+    offered_names = {tool["function"]["name"] for tool in call["tools"]}
+    assert search_web.TOOL_NAME in offered_names
+
+
 # --- One tool call: search_docs executes, second call streams ------------
 
 
@@ -265,6 +348,95 @@ def test_generate_stream_with_one_tool_call_executes_search_docs_and_streams_sec
     assert tool_entry["tool_call_id"] == "call_1"
     assert "--dry-run" in tool_entry["content"]
     assert "README.md" in tool_entry["content"]
+
+
+def test_generate_stream_with_search_web_tool_call_streams_second_call_and_cites_urls(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "groq_runner.credentials.resolve_key",
+        lambda provider, env_var: "tvly-test-key" if provider == "tavily" else None,
+    )
+    monkeypatch.setattr(search_web, "run_tool", lambda arguments: "1. Result\nURL: https://example.com")
+    monkeypatch.setattr(search_web, "citations_for_tool_call", lambda arguments: ["https://example.com"])
+
+    decision = _FakeDecision(
+        choices=[
+            _FakeDecisionChoice(
+                message=_FakeDecisionMessage(
+                    content=None,
+                    tool_calls=[
+                        _FakeToolCall(
+                            id="call_web",
+                            function=_FakeFunctionCall(
+                                name=search_web.TOOL_NAME,
+                                arguments=json.dumps({"query": "latest autumn news"}),
+                            ),
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+    stream_response = _FakeStream([_chunk("According to the result.")])
+    client = _ToolCallingGroqClient(decision, stream_response)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    received: list[str] = []
+    citations: list[ToolCitation] = []
+    runner.generate_stream(
+        [ChatMessage(role="user", text="/search latest autumn news")],
+        "llama-3.3-70b-versatile",
+        on_chunk=received.append,
+        on_citation=citations.append,
+    )
+
+    assert received == ["According to the result."]
+    tool_entry = client.seen_calls[1]["messages"][2]
+    assert tool_entry["role"] == "tool"
+    assert tool_entry["content"] == "1. Result\nURL: https://example.com"
+    assert citations == [ToolCitation(tool=search_web.TOOL_NAME, sources=["https://example.com"])]
+
+
+def test_generate_stream_search_web_failure_is_surfaced_and_turn_still_completes(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "groq_runner.credentials.resolve_key",
+        lambda provider, env_var: "tvly-test-key" if provider == "tavily" else None,
+    )
+
+    def _boom(arguments):
+        raise search_web.SearchWebError("Tavily search timed out after 10 seconds.")
+
+    monkeypatch.setattr(search_web, "run_tool", _boom)
+    decision = _FakeDecision(
+        choices=[
+            _FakeDecisionChoice(
+                message=_FakeDecisionMessage(
+                    content=None,
+                    tool_calls=[
+                        _FakeToolCall(
+                            id="call_web",
+                            function=_FakeFunctionCall(
+                                name=search_web.TOOL_NAME,
+                                arguments=json.dumps({"query": "latest autumn news"}),
+                            ),
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+    stream_response = _FakeStream([_chunk("I can still answer cautiously.")])
+    client = _ToolCallingGroqClient(decision, stream_response)
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    received: list[str] = []
+    runner.generate_stream(
+        [ChatMessage(role="user", text="/search latest autumn news")],
+        "llama-3.3-70b-versatile",
+        on_chunk=received.append,
+    )
+
+    assert received[0] == "[search_web failed: Tavily search timed out after 10 seconds.]\n\n"
+    assert received[1:] == ["I can still answer cautiously."]
 
 
 def test_generate_stream_tool_call_respects_cancel_event_on_second_call(tmp_path):
@@ -388,7 +560,7 @@ def test_generate_stream_unknown_tool_name_is_surfaced_as_a_failure_too(tmp_path
                     content=None,
                     tool_calls=[
                         _FakeToolCall(
-                            id="call_9", function=_FakeFunctionCall(name="search_web", arguments="{}")
+                            id="call_9", function=_FakeFunctionCall(name="made_up_tool", arguments="{}")
                         )
                     ],
                 )
@@ -404,7 +576,7 @@ def test_generate_stream_unknown_tool_name_is_surfaced_as_a_failure_too(tmp_path
         [ChatMessage(role="user", text="hi")], "llama-3.3-70b-versatile", on_chunk=received.append
     )
 
-    assert received[0] == "[search_web failed: unknown tool]\n\n"
+    assert received[0] == "[made_up_tool failed: unknown tool]\n\n"
     assert received[1:] == ["best effort answer"]
 
 

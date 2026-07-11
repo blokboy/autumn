@@ -24,6 +24,7 @@ OverviewPane,
 CandidatesTable,
 LogView,
 ModelCatalogView,
+SettingsView,
 TabbedContent {
     border: round #a9906f;
     border-title-align: left;
@@ -40,6 +41,8 @@ LogView:focus,
 LogView:focus-within,
 ModelCatalogView:focus,
 ModelCatalogView:focus-within,
+SettingsView:focus,
+SettingsView:focus-within,
 TabbedContent:focus,
 TabbedContent:focus-within {
     border: round #d98e4a;

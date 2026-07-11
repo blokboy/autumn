@@ -290,3 +290,50 @@ def test_keys_remove_accepts_tavily(capsys):
     assert result == 0
     assert "removed the stored key for tavily" in capsys.readouterr().out
     assert credentials.get_key("tavily") is None
+
+
+def test_config_show_uses_default_modes(capsys):
+    result = cli.main(["config", "show"])
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "search-mode: explicit" in output
+    assert "action-mode: confirm" in output
+
+
+def test_config_set_search_mode_round_trip(capsys):
+    import config
+
+    result = cli.main(["config", "set", "search-mode", "autonomous"])
+
+    assert result == 0
+    assert "search-mode: autonomous" in capsys.readouterr().out
+    assert config.get_search_mode() == "autonomous"
+
+    cli.main(["config", "show"])
+    assert "search-mode: autonomous" in capsys.readouterr().out
+
+
+def test_config_set_action_mode_round_trip_alongside_search_mode(capsys):
+    import config
+
+    assert cli.main(["config", "set", "search-mode", "autonomous"]) == 0
+    capsys.readouterr()
+
+    result = cli.main(["config", "set", "action-mode", "autonomous"])
+
+    assert result == 0
+    assert "action-mode: autonomous" in capsys.readouterr().out
+    assert config.as_dict() == {"search-mode": "autonomous", "action-mode": "autonomous"}
+
+    cli.main(["config", "show"])
+    output = capsys.readouterr().out
+    assert "search-mode: autonomous" in output
+    assert "action-mode: autonomous" in output
+
+
+def test_config_set_rejects_invalid_value(capsys):
+    result = cli.main(["config", "set", "search-mode", "always"])
+
+    assert result == 1
+    assert "search-mode must be one of: explicit, autonomous" in capsys.readouterr().out

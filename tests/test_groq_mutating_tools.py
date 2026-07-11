@@ -188,6 +188,49 @@ def test_confirmed_destructive_tool_executes_with_1_5s_delay(tmp_path):
     assert local_models.list_models(tmp_path) == []
 
 
+def test_autonomous_action_mode_executes_non_destructive_tool_without_confirm(tmp_path):
+    import config
+
+    _seed_model(tmp_path, "model-a")
+    _seed_model(tmp_path, "model-b")
+    config.set_action_mode("autonomous")
+    decision = _tool_call_decision("set_default_model", {"model_name": "model-b"})
+    stream_response = _FakeStream([_chunk("Done.")])
+    client = _ToolCallingGroqClient(decision, stream_response)
+    confirm = _RecordingConfirm(answer=False)
+    runner = GroqRunner(client=client, catalog_root=tmp_path, confirm=confirm)
+
+    runner.generate_stream(
+        [ChatMessage(role="user", text="make model-b the default")],
+        "llama-3.3-70b-versatile",
+        on_chunk=lambda _: None,
+    )
+
+    assert confirm.calls == []
+    assert local_models.get_default(tmp_path).name == "model-b"
+
+
+def test_autonomous_action_mode_executes_destructive_tool_without_confirm_or_delay(tmp_path):
+    import config
+
+    _seed_model(tmp_path, "gone-soon")
+    config.set_action_mode("autonomous")
+    decision = _tool_call_decision("remove_model", {"model_name": "gone-soon"})
+    stream_response = _FakeStream([_chunk("Removed.")])
+    client = _ToolCallingGroqClient(decision, stream_response)
+    confirm = _RecordingConfirm(answer=False)
+    runner = GroqRunner(client=client, catalog_root=tmp_path, confirm=confirm)
+
+    runner.generate_stream(
+        [ChatMessage(role="user", text="remove gone-soon")],
+        "llama-3.3-70b-versatile",
+        on_chunk=lambda _: None,
+    )
+
+    assert confirm.calls == []
+    assert local_models.list_models(tmp_path) == []
+
+
 # --- Declined: tool does not execute, model still gets an answer ----------
 
 

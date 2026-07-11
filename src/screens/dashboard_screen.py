@@ -25,6 +25,7 @@ from widgets.log_view import LogView
 from widgets.model_catalog_view import ModelCatalogView
 from widgets.overview_pane import OverviewPane
 from widgets.run_sidebar import RunListItem, RunSidebar
+from widgets.settings_view import SettingsView
 
 # How often to poll the live DashboardState.version for changes made off-screen
 # (e.g. by DashboardCallback via app.call_from_thread). DashboardState is a plain
@@ -132,6 +133,11 @@ class DashboardScreen(Screen):
                     "Models",
                     ModelCatalogView(self._catalog_entries(), id="models"),
                     id="models-tab",
+                )
+                yield TabPane(
+                    "Settings",
+                    SettingsView(id="settings"),
+                    id="settings-tab",
                 )
         yield CommandBar(id="command-bar")
 
