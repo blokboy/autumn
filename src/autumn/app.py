@@ -23,6 +23,7 @@ from autumn import (
 from autumn.cli import LaunchSpec, LaunchSpecError, parse_command_line
 from autumn.dashboard_callback import DashboardCallback
 from autumn.fixtures import dry_run_events
+from autumn.groq_runner import GroqRunner, GroqRuntimeError
 from autumn.local_model_runner import LocalModelRunner, LocalModelRuntimeError
 from autumn.models import (
     ChatMessage,
@@ -137,6 +138,7 @@ class AutumnApp(App):
         chat_sessions_root: Path | None = None,
         model_catalog_root: Path | None = None,
         local_model_runner: LocalModelRunner | None = None,
+        groq_runner: GroqRunner | None = None,
         is_model_runtime_available: model_router.RuntimeAvailability | None = None,
         prompt_routing_policy: PromptRoutingPolicy | None = None,
         model_download_fn: model_downloader.DownloadFile | None = None,
@@ -167,6 +169,14 @@ class AutumnApp(App):
         self._chat_model_status: str | None = None
         self._model_catalog_root = model_catalog_root or paths.models_root()
         self._local_model_runner = local_model_runner or LocalModelRunner()
+        # Unlike `_local_model_runner`, not eagerly defaulted here:
+        # `GroqRunner()`'s real client construction raises if `GROQ_API_KEY`
+        # is unset (the common case for most installs/tests), so the real
+        # default is only constructed lazily in `_answer_prompt_async`, at
+        # the point a Groq choice is actually reached -- which, per
+        # `groq_policy.build_policy`'s catalog gating, only happens when the
+        # key is already set.
+        self._groq_runner = groq_runner
         self._is_model_runtime_available = is_model_runtime_available
         self._prompt_routing_policy = prompt_routing_policy
         # None means "use model_downloader's real Hugging Face download";
@@ -421,6 +431,18 @@ class AutumnApp(App):
                         ),
                     )
                 except LocalModelRuntimeError as exc:
+                    choice = ModelChoice(
+                        name=local_llm.OFFLINE_TINY_MODEL,
+                        backend="builtin",
+                        path=None,
+                        reason=str(exc),
+                    )
+                    message = local_llm.generate_response(snapshot, choice)
+            elif choice.backend == "provider" and choice.provider == "groq":
+                groq_runner = self._groq_runner or GroqRunner()
+                try:
+                    message = groq_runner.generate(snapshot, choice.name)
+                except GroqRuntimeError as exc:
                     choice = ModelChoice(
                         name=local_llm.OFFLINE_TINY_MODEL,
                         backend="builtin",

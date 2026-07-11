@@ -5,8 +5,9 @@ import json
 from textual.widgets import Static
 from textual.widgets import Input
 
-from autumn import local_models
+from autumn import groq_policy, local_models
 from autumn.app import AutumnApp
+from autumn.groq_runner import GroqRuntimeError
 from autumn.local_model_runner import LocalModelRuntimeError
 from autumn.models import (
     ChatMessage,
@@ -318,6 +319,141 @@ async def test_prompt_with_provider_policy_falls_back_until_provider_execution_e
         ]
         status_text = app.screen.query_one("#chat-model-status", Static).content
         assert "Fallback: autumn/offline-tiny (provider claude/sonnet not executable yet)" in str(status_text)
+
+
+def _groq_policy_with_default(model_name: str = "llama-3.3-70b-versatile") -> PromptRoutingPolicy:
+    return PromptRoutingPolicy(
+        provider_accounts=[ProviderAccount(provider="groq", account_id="default", is_signed_in=True)],
+        provider_models=[
+            ProviderModel(
+                name=model_name,
+                provider="groq",
+                account_id="default",
+                priority=10,
+                is_default=True,
+            )
+        ],
+    )
+
+
+async def test_prompt_receives_async_groq_reply(tmp_path):
+    class FakeGroqRunner:
+        def generate(self, messages: list[ChatMessage], model_name: str) -> ChatMessage:
+            assert messages == [ChatMessage(role="user", text="hello")]
+            assert model_name == "llama-3.3-70b-versatile"
+            return ChatMessage(role="assistant", text="Hi from Groq.", model=model_name)
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=tmp_path / "models",
+        groq_runner=FakeGroqRunner(),
+        prompt_routing_policy=_groq_policy_with_default(),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Empty catalog -> ModelPickerScreen lands first; skip it.
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await pilot.press(":")
+        await pilot.pause()
+        app.screen.query_one(CommandBar).query_one(Input).insert_text_at_cursor("hello")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="hello"),
+            ChatMessage(role="assistant", text="Hi from Groq.", model="llama-3.3-70b-versatile"),
+        ]
+        status_text = app.screen.query_one("#chat-model-status", Static).content
+        assert "Model: llama-3.3-70b-versatile (provider available)" in str(status_text)
+
+
+async def test_prompt_falls_back_when_groq_runtime_fails(tmp_path):
+    class FailingGroqRunner:
+        def generate(self, messages: list[ChatMessage], model_name: str) -> ChatMessage:
+            raise GroqRuntimeError(f"{model_name} failed: connection error")
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=tmp_path / "models",
+        groq_runner=FailingGroqRunner(),
+        prompt_routing_policy=_groq_policy_with_default(),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await pilot.press(":")
+        await pilot.pause()
+        app.screen.query_one(CommandBar).query_one(Input).insert_text_at_cursor("hello")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="hello"),
+            ChatMessage(
+                role="assistant",
+                text="Offline local response: hello",
+                model="autumn/offline-tiny",
+            ),
+        ]
+        status_text = app.screen.query_one("#chat-model-status", Static).content
+        assert (
+            "Fallback: autumn/offline-tiny (llama-3.3-70b-versatile failed: connection error)"
+            in str(status_text)
+        )
+
+
+async def test_prompt_falls_through_when_groq_key_absent(tmp_path, monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=tmp_path / "models",
+        # No groq_runner injected: if the (unsigned-in) Groq catalog entries
+        # were ever reached, this would fall through to a real GroqRunner()
+        # and raise (no GROQ_API_KEY) rather than quietly succeeding -- so
+        # this test also proves the fallback never touches Groq at all.
+        prompt_routing_policy=groq_policy.build_policy(),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await pilot.press(":")
+        await pilot.pause()
+        app.screen.query_one(CommandBar).query_one(Input).insert_text_at_cursor("hello")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="hello"),
+            ChatMessage(
+                role="assistant",
+                text="Offline local response: hello",
+                model="autumn/offline-tiny",
+            ),
+        ]
+        status_text = app.screen.query_one("#chat-model-status", Static).content
+        assert "Fallback: autumn/offline-tiny (offline fallback)" in str(status_text)
 
 
 async def test_live_run_queues_prompt_replies_in_order_without_duplicate_users(tmp_path):
