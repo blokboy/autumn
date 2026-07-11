@@ -103,3 +103,44 @@ def test_remove_model_deletes_file_and_promotes_next_default(tmp_path):
 
 def test_get_default_model_returns_none_when_catalog_is_empty(tmp_path):
     assert local_models.get_default(tmp_path / "models") is None
+
+
+def test_mark_downloading_registers_placeholder_as_default_in_empty_catalog(tmp_path):
+    catalog_root = tmp_path / "models"
+
+    placeholder = local_models.mark_downloading(
+        catalog_root, name="pending", context_window=4096
+    )
+
+    assert placeholder.status == "downloading"
+    assert placeholder.is_default
+    assert local_models.list_models(catalog_root) == [placeholder]
+
+
+def test_mark_downloading_does_not_become_default_when_one_already_exists(tmp_path):
+    first = tmp_path / "first.gguf"
+    first.write_bytes(b"first")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="first", source_path=first)
+
+    placeholder = local_models.mark_downloading(catalog_root, name="pending")
+
+    assert not placeholder.is_default
+    assert local_models.get_default(catalog_root).name == "first"
+
+
+def test_install_model_replaces_downloading_placeholder_with_real_entry(tmp_path):
+    catalog_root = tmp_path / "models"
+    local_models.mark_downloading(catalog_root, name="pending", context_window=4096)
+
+    source = tmp_path / "pending.gguf"
+    source.write_bytes(b"real bytes")
+    installed = local_models.install_model(
+        catalog_root, name="pending", source_path=source, context_window=4096
+    )
+
+    assert installed.status == "installed"
+    assert installed.is_default
+    models = local_models.list_models(catalog_root)
+    assert models == [installed]
+    assert models[0].path.read_bytes() == b"real bytes"
