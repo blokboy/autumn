@@ -15,7 +15,7 @@ def _render_messages(messages: list[ChatMessage]) -> str:
         return "Ask Autumn about your runs from the landing input or command bar."
     lines = []
     for message in messages:
-        speaker = "You" if message.role == "user" else "Autumn"
+        speaker = message.participant_name or ("You" if message.role == "user" else "Autumn")
         suffix = f" [{message.model}]" if message.model else ""
         lines.append(f"{speaker}{suffix}: {message.text}")
     return "\n\n".join(lines)

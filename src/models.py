@@ -44,9 +44,10 @@ class LogLine:
 class ChatMessage:
     """One message in a dashboard-scoped chat transcript."""
 
-    role: Literal["user", "assistant"]
+    role: Literal["system", "user", "assistant"]
     text: str
     model: str | None = None
+    participant_name: str | None = None
 
 
 @dataclass

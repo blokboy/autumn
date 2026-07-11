@@ -54,6 +54,49 @@ def test_load_chat_roundtrips_messages(tmp_path):
     assert chat_store.load_chat(path) == messages
 
 
+def test_load_chat_roundtrips_participant_metadata(tmp_path):
+    path = tmp_path / "session.json"
+    messages = [
+        ChatMessage(
+            role="assistant",
+            text="I checked the docs.",
+            model="local/tiny",
+            participant_name="Autumn Sub Agent 1",
+        ),
+    ]
+    chat_store.persist_chat(path, messages, pid=os.getpid())
+
+    assert json.loads(path.read_text())["messages"] == [
+        {
+            "role": "assistant",
+            "text": "I checked the docs.",
+            "model": "local/tiny",
+            "participant_name": "Autumn Sub Agent 1",
+        }
+    ]
+    assert chat_store.load_chat(path) == messages
+
+
+def test_load_chat_keeps_older_records_without_participant_metadata(tmp_path):
+    path = tmp_path / "session.json"
+    path.write_text(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "messages": [
+                    {"role": "user", "text": "hello"},
+                    {"role": "assistant", "text": "hi", "model": "local/tiny"},
+                ],
+            }
+        )
+    )
+
+    assert chat_store.load_chat(path) == [
+        ChatMessage(role="user", text="hello"),
+        ChatMessage(role="assistant", text="hi", model="local/tiny"),
+    ]
+
+
 def test_load_chat_drops_malformed_messages_but_keeps_the_rest(tmp_path):
     path = tmp_path / "session.json"
     path.write_text(

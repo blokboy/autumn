@@ -1,11 +1,13 @@
 """Behavioral tests for dashboard-scoped chat prompts."""
 
 import json
+import threading
 
 from textual.widgets import Static
 from textual.widgets import Input
 
 import groq_policy, local_models
+import subagent
 from app import AutumnApp
 from local_model_runner import LocalModelRuntimeError
 from models import (
@@ -16,6 +18,7 @@ from models import (
     RunStatus,
 )
 from screens.dashboard_screen import DashboardScreen
+from widgets.chat_view import _render_messages
 from widgets.command_bar import CommandBar
 
 
@@ -49,6 +52,375 @@ async def test_empty_chat_explains_shared_prompt_surface(tmp_path):
         assert "Model: ready to choose a local model or offline fallback" in str(status_text)
         assert "Ask Autumn about your runs from the landing input or command bar." in str(chat_text)
         assert "stub" not in str(chat_text).lower()
+
+
+def test_chat_transcript_renders_named_participant_with_model_metadata():
+    rendered = _render_messages(
+        [
+            ChatMessage(role="user", text="hello"),
+            ChatMessage(role="assistant", text="hi", model="local/tiny"),
+            ChatMessage(
+                role="assistant",
+                text="I checked the docs.",
+                model="local/tiny",
+                participant_name="Autumn Sub Agent 1",
+            ),
+        ]
+    )
+
+    assert "You: hello" in rendered
+    assert "Autumn [local/tiny]: hi" in rendered
+    assert "Autumn Sub Agent 1 [local/tiny]: I checked the docs." in rendered
+
+
+async def test_subagent_command_preserves_raw_command_and_posts_named_result(tmp_path):
+    source_model = tmp_path / "source.gguf"
+    source_model.write_bytes(b"fake gguf")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=source_model)
+    release = threading.Event()
+
+    class BlockingSubagentRunner:
+        def __init__(self):
+            self.messages = None
+
+        def generate(self, messages, model):
+            self.messages = messages
+            release.wait(timeout=2)
+            return ChatMessage(role="assistant", text="subagent answer", model=model.name)
+
+    runner = BlockingSubagentRunner()
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=catalog_root,
+        local_model_runner=runner,
+        is_model_runtime_available=lambda model: True,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        app.submit_command("/subagent inspect the run")
+        await pilot.pause(0.1)
+
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="/subagent inspect the run"),
+            ChatMessage(
+                role="assistant",
+                text="working...",
+                participant_name="Autumn Sub Agent 1",
+            ),
+        ]
+
+        release.set()
+        await pilot.pause(0.2)
+
+        assert runner.messages == [
+            ChatMessage(role="system", text=subagent.SUBAGENT_SYSTEM_INSTRUCTION),
+            ChatMessage(role="user", text="inspect the run"),
+        ]
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="/subagent inspect the run"),
+            ChatMessage(
+                role="assistant",
+                text="subagent answer",
+                model="tiny",
+                participant_name="Autumn Sub Agent 1",
+            ),
+        ]
+        chat_text = app.screen.query_one("#chat-transcript", Static).content
+        assert "Autumn Sub Agent 1 [tiny]: subagent answer" in str(chat_text)
+
+
+async def test_subagent_command_runs_while_live_run_without_queueing(tmp_path):
+    script = tmp_path / "slow.py"
+    script.write_text("import time\ntime.sleep(0.4)\n")
+    source_model = tmp_path / "source.gguf"
+    source_model.write_bytes(b"fake gguf")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=source_model)
+
+    class FastSubagentRunner:
+        def generate(self, messages, model):
+            return ChatMessage(role="assistant", text="parallel answer", model=model.name)
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        run_name="live",
+        run_dir=tmp_path / "live",
+        script_path=script,
+        dry_run=False,
+        queue_sessions_root=tmp_path / "queues",
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=catalog_root,
+        local_model_runner=FastSubagentRunner(),
+        is_model_runtime_available=lambda model: True,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.state.status is RunStatus.RUNNING
+
+        app.submit_command("/subagent review this")
+        await pilot.pause(0.2)
+
+        assert app.pending_queue == []
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="/subagent review this"),
+            ChatMessage(
+                role="assistant",
+                text="parallel answer",
+                model="tiny",
+                participant_name="Autumn Sub Agent 1",
+            ),
+        ]
+
+
+async def test_subagent_commands_cap_running_at_four_and_queue_the_fifth(tmp_path):
+    source_model = tmp_path / "source.gguf"
+    source_model.write_bytes(b"fake gguf")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=source_model)
+    releases = {f"task {index}": threading.Event() for index in range(1, 6)}
+    started: list[str] = []
+
+    class BlockingSubagentRunner:
+        def generate(self, messages, model):
+            prompt = messages[-1].text
+            started.append(prompt)
+            releases[prompt].wait(timeout=2)
+            return ChatMessage(role="assistant", text=f"answer {prompt}", model=model.name)
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=catalog_root,
+        local_model_runner=BlockingSubagentRunner(),
+        is_model_runtime_available=lambda model: True,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        for index in range(1, 6):
+            app.submit_command(f"/subagent task {index}")
+        await pilot.pause(0.2)
+
+        assert started == ["task 1", "task 2", "task 3", "task 4"]
+        assert app.chat_messages[-1] == ChatMessage(
+            role="assistant",
+            text="queued...",
+            participant_name="Autumn Sub Agent 5",
+        )
+
+        releases["task 1"].set()
+        await pilot.pause(0.2)
+
+        assert started == ["task 1", "task 2", "task 3", "task 4", "task 5"]
+        assert app.chat_messages[1] == ChatMessage(
+            role="assistant",
+            text="answer task 1",
+            model="tiny",
+            participant_name="Autumn Sub Agent 1",
+        )
+        assert app.chat_messages[-1] == ChatMessage(
+            role="assistant",
+            text="working...",
+            participant_name="Autumn Sub Agent 5",
+        )
+
+        for prompt in ["task 2", "task 3", "task 4", "task 5"]:
+            releases[prompt].set()
+        await pilot.pause(0.2)
+
+        assert app.pending_queue == []
+
+
+async def test_subagent_fallback_posts_warning_and_still_completes_reply(tmp_path):
+    source_model = tmp_path / "source.gguf"
+    source_model.write_bytes(b"fake gguf")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=source_model)
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=catalog_root,
+        is_model_runtime_available=lambda model: False,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        app.submit_command("/subagent inspect fallback")
+        await pilot.pause(0.2)
+
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="/subagent inspect fallback"),
+            ChatMessage(
+                role="assistant",
+                text="Offline local response: inspect fallback",
+                model="autumn/offline-tiny",
+                participant_name="Autumn Sub Agent 1",
+            ),
+            ChatMessage(
+                role="assistant",
+                text=(
+                    "Warning: Autumn Sub Agent 1 fell back to autumn/offline-tiny. "
+                    "Reason: runtime missing for tiny. "
+                    "Capability impact: expected [model_reply]; "
+                    "fallback provides [model_reply]; lost [none]."
+                ),
+            ),
+        ]
+
+
+async def test_subagent_cancel_removes_queued_subagent_by_name(tmp_path):
+    source_model = tmp_path / "source.gguf"
+    source_model.write_bytes(b"fake gguf")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=source_model)
+    releases = {f"task {index}": threading.Event() for index in range(1, 6)}
+    started: list[str] = []
+
+    class BlockingSubagentRunner:
+        def generate(self, messages, model):
+            prompt = messages[-1].text
+            started.append(prompt)
+            releases[prompt].wait(timeout=2)
+            return ChatMessage(role="assistant", text=f"answer {prompt}", model=model.name)
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=catalog_root,
+        local_model_runner=BlockingSubagentRunner(),
+        is_model_runtime_available=lambda model: True,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        for index in range(1, 6):
+            app.submit_command(f"/subagent task {index}")
+        await pilot.pause(0.2)
+
+        app.submit_command("/subagent cancel Autumn Sub Agent 5")
+        await pilot.pause(0.1)
+
+        assert started == ["task 1", "task 2", "task 3", "task 4"]
+        assert app.chat_messages[-3:] == [
+            ChatMessage(role="assistant", text="cancelled before start.", participant_name="Autumn Sub Agent 5"),
+            ChatMessage(role="user", text="/subagent cancel Autumn Sub Agent 5"),
+            ChatMessage(role="assistant", text="Cancelled queued subagent Autumn Sub Agent 5."),
+        ]
+
+        for prompt in ["task 1", "task 2", "task 3", "task 4", "task 5"]:
+            releases[prompt].set()
+        await pilot.pause(0.2)
+
+        assert "task 5" not in started
+
+
+async def test_subagent_cancel_marks_running_subagent_and_ignores_late_result(tmp_path):
+    source_model = tmp_path / "source.gguf"
+    source_model.write_bytes(b"fake gguf")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=source_model)
+    release = threading.Event()
+
+    class BlockingSubagentRunner:
+        def generate(self, messages, model):
+            release.wait(timeout=2)
+            return ChatMessage(role="assistant", text="late answer", model=model.name)
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=catalog_root,
+        local_model_runner=BlockingSubagentRunner(),
+        is_model_runtime_available=lambda model: True,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        app.submit_command("/subagent slow work")
+        await pilot.pause(0.1)
+        app.submit_command("/subagent cancel Autumn Sub Agent 1")
+        await pilot.pause(0.1)
+
+        assert app.chat_messages == [
+            ChatMessage(role="user", text="/subagent slow work"),
+            ChatMessage(role="assistant", text="cancelled.", participant_name="Autumn Sub Agent 1"),
+            ChatMessage(role="user", text="/subagent cancel Autumn Sub Agent 1"),
+            ChatMessage(role="assistant", text="Cancelled running subagent Autumn Sub Agent 1."),
+        ]
+
+        release.set()
+        await pilot.pause(0.2)
+
+        assert app.chat_messages[1] == ChatMessage(
+            role="assistant",
+            text="cancelled.",
+            participant_name="Autumn Sub Agent 1",
+        )
+
+
+async def test_subagent_cancel_unknown_reports_error_without_changing_completed_history(tmp_path):
+    source_model = tmp_path / "source.gguf"
+    source_model.write_bytes(b"fake gguf")
+    catalog_root = tmp_path / "models"
+    local_models.install_model(catalog_root, name="tiny", source_path=source_model)
+
+    class FastSubagentRunner:
+        def generate(self, messages, model):
+            return ChatMessage(role="assistant", text="done", model=model.name)
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        chat_sessions_root=tmp_path / "chats",
+        model_catalog_root=catalog_root,
+        local_model_runner=FastSubagentRunner(),
+        is_model_runtime_available=lambda model: True,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        app.submit_command("/subagent quick work")
+        await pilot.pause(0.2)
+        completed = app.chat_messages[1]
+
+        app.submit_command("/subagent cancel Autumn Sub Agent 1")
+        await pilot.pause(0.1)
+
+        assert app.chat_messages[1] is completed
+        assert app.chat_messages[1] == ChatMessage(
+            role="assistant",
+            text="done",
+            model="tiny",
+            participant_name="Autumn Sub Agent 1",
+        )
+        assert app.chat_messages[-2:] == [
+            ChatMessage(role="user", text="/subagent cancel Autumn Sub Agent 1"),
+            ChatMessage(
+                role="assistant",
+                text="No running or queued subagent named Autumn Sub Agent 1.",
+            ),
+        ]
 
 
 async def test_non_gepa_command_bar_prompt_updates_same_dashboard_chat(tmp_path):

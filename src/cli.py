@@ -223,6 +223,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the run list as a JSON array instead of a plain-text table.",
     )
 
+    subagent_parser = subparsers.add_parser(
+        "subagent",
+        help="Run a one-shot subagent prompt and print only the final answer.",
+    )
+    subagent_parser.add_argument("prompt", help="Prompt for the one-shot subagent.")
+
     models_parser = subparsers.add_parser(
         "models",
         help="Manage Autumn's local model catalog.",
@@ -369,6 +375,18 @@ def _runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _subagent(args: argparse.Namespace) -> int:
+    import subagent
+
+    result = subagent.run_subagent(
+        args.prompt,
+        catalog_root=paths.models_root(),
+        policy=groq_policy.build_policy(),
+    )
+    print(result.answer)
+    return 0
+
+
 def _models_as_rows(models: list[local_models.LocalModel]) -> list[dict]:
     return [
         {
@@ -475,6 +493,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "runs":
         return _runs(args)
+
+    if args.command == "subagent":
+        return _subagent(args)
 
     if args.command == "models":
         return _models(args)

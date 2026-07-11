@@ -70,6 +70,29 @@ def test_llama_cpp_runner_reports_runtime_failure(tmp_path):
         runner.generate([ChatMessage(role="user", text="hello")], model)
 
 
+def test_llama_cpp_runner_includes_system_messages_in_prompt(tmp_path):
+    model_path = tmp_path / "tiny.gguf"
+    model_path.write_bytes(b"fake model")
+    model = LocalModel(name="tiny", backend="llama.cpp", path=model_path)
+    seen_commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        seen_commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="answer\n", stderr="")
+
+    runner = LocalModelRunner(llama_cli_path=Path("/usr/local/bin/llama-cli"), run_command=fake_run)
+
+    runner.generate(
+        [
+            ChatMessage(role="system", text="Answer concisely."),
+            ChatMessage(role="user", text="hello"),
+        ],
+        model,
+    )
+
+    assert seen_commands[0][-1] == "System: Answer concisely.\nUser: hello\nAssistant:"
+
+
 def test_llama_cpp_runner_uses_env_configured_cli_path(tmp_path, monkeypatch):
     model_path = tmp_path / "tiny.gguf"
     model_path.write_bytes(b"fake model")

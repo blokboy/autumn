@@ -21,6 +21,8 @@ def _message_to_dict(message: ChatMessage) -> dict:
     raw = {"role": message.role, "text": message.text}
     if message.model is not None:
         raw["model"] = message.model
+    if message.participant_name is not None:
+        raw["participant_name"] = message.participant_name
     return raw
 
 
@@ -30,13 +32,23 @@ def _message_from_dict(raw: object) -> ChatMessage | None:
     role = raw.get("role")
     text = raw.get("text")
     model = raw.get("model")
+    participant_name = raw.get("participant_name")
     if role not in ("user", "assistant"):
         return None
     if not isinstance(text, str) or not text:
         return None
     if model is not None and not isinstance(model, str):
         return None
-    return ChatMessage(role=role, text=text, model=model)
+    if participant_name is not None and (
+        not isinstance(participant_name, str) or not participant_name
+    ):
+        return None
+    return ChatMessage(
+        role=role,
+        text=text,
+        model=model,
+        participant_name=participant_name,
+    )
 
 
 def persist_chat(path: Path, messages: list[ChatMessage], pid: int | None = None) -> None:

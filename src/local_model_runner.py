@@ -182,7 +182,12 @@ def _drain(stream, chunks: list[bytes]) -> None:
 def _prompt_from_messages(messages: list[ChatMessage]) -> str:
     lines: list[str] = []
     for message in messages:
-        speaker = "User" if message.role == "user" else "Assistant"
+        if message.role == "system":
+            speaker = "System"
+        elif message.role == "user":
+            speaker = "User"
+        else:
+            speaker = "Assistant"
         lines.append(f"{speaker}: {message.text}")
     lines.append("Assistant:")
     return "\n".join(lines)

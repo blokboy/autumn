@@ -3,6 +3,7 @@
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -19,6 +20,7 @@ import palette
 import paths
 import queue_store
 import runner
+import subagent
 from cli import LaunchSpec, LaunchSpecError, parse_command_line
 from dashboard_callback import DashboardCallback
 from fixtures import dry_run_events
@@ -102,6 +104,29 @@ def _model_status_for_reply(message: ChatMessage, choice: ModelChoice) -> str:
     return _model_status_from_choice(choice)
 
 
+def _format_capability_list(capabilities: tuple[str, ...]) -> str:
+    return ", ".join(capabilities) if capabilities else "none"
+
+
+def _subagent_fallback_warning_text(
+    subagent_name: str,
+    warning: subagent.SubagentFallbackWarning,
+) -> str:
+    source = (
+        f"from {warning.original_model} to {warning.fallback_model}"
+        if warning.original_model is not None
+        else f"to {warning.fallback_model}"
+    )
+    return (
+        f"Warning: {subagent_name} fell back {source}. "
+        f"Reason: {warning.reason}. "
+        "Capability impact: "
+        f"expected [{_format_capability_list(warning.expected_capabilities)}]; "
+        f"fallback provides [{_format_capability_list(warning.fallback_capabilities)}]; "
+        f"lost [{_format_capability_list(warning.lost_capabilities)}]."
+    )
+
+
 def _append_stream_marker(text: str, marker: str) -> str:
     """Appends a stream-interruption marker (e.g. `"[stopped]"` or
     `"[interrupted: ...]"`) to whatever partial text streamed in so far --
@@ -129,6 +154,19 @@ _STREAM_REFRESH_INTERVAL_SECONDS = 0.1
 # DashboardState is a plain dataclass mutated from a background thread, not a
 # Textual reactive/message emitter.
 _QUEUE_POLL_INTERVAL_SECONDS = 0.2
+
+_SUBAGENT_PREFIX = "/subagent "
+_SUBAGENT_WORKING_TEXT = "working..."
+_SUBAGENT_QUEUED_TEXT = "queued..."
+_MAX_RUNNING_SUBAGENTS = 4
+
+
+@dataclass
+class _DashboardSubagent:
+    name: str
+    prompt: str
+    message: ChatMessage
+    cancelled: bool = False
 
 
 class AutumnApp(App):
@@ -233,6 +271,9 @@ class AutumnApp(App):
         self.pending_queue: list[LaunchSpec | str] = list(initial_queue or [])
         self._queued_prompt_refs: list[ChatMessage | None] = []
         self._queue_watch_state: DashboardState | None = self.state
+        self._next_subagent_number = 1
+        self._running_subagents: dict[str, _DashboardSubagent] = {}
+        self._queued_subagents: list[_DashboardSubagent] = []
 
     def on_mount(self) -> None:
         # Launch mode (both run_name/run_dir given, cli.py's `run` subcommand)
@@ -462,6 +503,146 @@ class AutumnApp(App):
         self._refresh_chat_display()
         if on_complete is not None:
             on_complete()
+
+    def _next_subagent_name(self) -> str:
+        existing = {
+            message.participant_name
+            for message in self.chat_messages
+            if message.participant_name is not None
+        }
+        while True:
+            name = f"Autumn Sub Agent {self._next_subagent_number}"
+            self._next_subagent_number += 1
+            if name not in existing:
+                return name
+
+    def _parse_subagent_cancel_command(self, text: str) -> str | None:
+        prefix = f"{_SUBAGENT_PREFIX}cancel "
+        if text == "/subagent cancel":
+            return ""
+        if not text.startswith(prefix):
+            return None
+        return text[len(prefix) :].strip()
+
+    def _parse_subagent_command(self, text: str) -> str | None:
+        if text == "/subagent":
+            return ""
+        if not text.startswith(_SUBAGENT_PREFIX):
+            return None
+        return text[len(_SUBAGENT_PREFIX) :].strip()
+
+    def _launch_subagent(self, *, raw_command: str, prompt: str) -> None:
+        self._append_user_prompt(raw_command)
+        name = self._next_subagent_name()
+        message = ChatMessage(
+            role="assistant",
+            participant_name=name,
+            text=_SUBAGENT_WORKING_TEXT
+            if len(self._running_subagents) < _MAX_RUNNING_SUBAGENTS
+            else _SUBAGENT_QUEUED_TEXT,
+        )
+        self.chat_messages.append(message)
+        self._persist_chat()
+        self._refresh_chat_display()
+        job = _DashboardSubagent(name=name, prompt=prompt, message=message)
+        if len(self._running_subagents) >= _MAX_RUNNING_SUBAGENTS:
+            self._queued_subagents.append(job)
+            return
+        self._start_subagent_job(job)
+
+    def _start_subagent_job(self, job: _DashboardSubagent) -> None:
+        self._running_subagents[job.name] = job
+        job.message.text = _SUBAGENT_WORKING_TEXT
+        self._persist_chat()
+        self._refresh_chat_display()
+
+        def run() -> None:
+            try:
+                result = subagent.run_subagent(
+                    job.prompt,
+                    catalog_root=self._model_catalog_root,
+                    is_runtime_available=self._is_model_runtime_available,
+                    policy=self._prompt_routing_policy,
+                    local_model_runner=self._local_model_runner,
+                    groq_runner=self._groq_runner,
+                )
+            except Exception as exc:
+                self.call_from_thread(
+                    self._finish_subagent_message,
+                    job,
+                    f"Error: subagent failed: {exc}",
+                    None,
+                    None,
+                )
+                return
+            self.call_from_thread(
+                self._finish_subagent_message,
+                job,
+                result.answer,
+                result.choice.name,
+                result.fallback_warning,
+            )
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _finish_subagent_message(
+        self,
+        job: _DashboardSubagent,
+        answer: str,
+        model: str | None,
+        fallback_warning: subagent.SubagentFallbackWarning | None,
+    ) -> None:
+        if job.cancelled:
+            return
+        self._running_subagents.pop(job.name, None)
+        job.message.text = answer
+        job.message.model = model
+        if fallback_warning is not None:
+            self.chat_messages.append(
+                ChatMessage(
+                    role="assistant",
+                    text=_subagent_fallback_warning_text(job.name, fallback_warning),
+                )
+            )
+        self._persist_chat()
+        self._refresh_chat_display()
+        self._start_next_queued_subagent()
+
+    def _start_next_queued_subagent(self) -> None:
+        while self._queued_subagents and len(self._running_subagents) < _MAX_RUNNING_SUBAGENTS:
+            self._start_subagent_job(self._queued_subagents.pop(0))
+
+    def _cancel_subagent(self, *, raw_command: str, name: str) -> None:
+        self._append_user_prompt(raw_command)
+        running = self._running_subagents.pop(name, None)
+        if running is not None:
+            running.cancelled = True
+            running.message.text = "cancelled."
+            self.chat_messages.append(
+                ChatMessage(role="assistant", text=f"Cancelled running subagent {name}.")
+            )
+            self._persist_chat()
+            self._refresh_chat_display()
+            self._start_next_queued_subagent()
+            return
+
+        for index, queued in enumerate(self._queued_subagents):
+            if queued.name == name:
+                self._queued_subagents.pop(index)
+                queued.cancelled = True
+                queued.message.text = "cancelled before start."
+                self.chat_messages.append(
+                    ChatMessage(role="assistant", text=f"Cancelled queued subagent {name}.")
+                )
+                self._persist_chat()
+                self._refresh_chat_display()
+                return
+
+        self.chat_messages.append(
+            ChatMessage(role="assistant", text=f"No running or queued subagent named {name}.")
+        )
+        self._persist_chat()
+        self._refresh_chat_display()
 
     def _append_assistant_reply(
         self,
@@ -826,6 +1007,22 @@ class AutumnApp(App):
         """
         text = text.strip()
         if not text:
+            return
+
+        subagent_cancel_name = self._parse_subagent_cancel_command(text)
+        if subagent_cancel_name is not None:
+            if not subagent_cancel_name:
+                self.notify("Usage: /subagent cancel <name>", severity="error")
+                return
+            self._cancel_subagent(raw_command=text, name=subagent_cancel_name)
+            return
+
+        subagent_prompt = self._parse_subagent_command(text)
+        if subagent_prompt is not None:
+            if not subagent_prompt:
+                self.notify("Usage: /subagent <prompt>", severity="error")
+                return
+            self._launch_subagent(raw_command=text, prompt=subagent_prompt)
             return
 
         try:
