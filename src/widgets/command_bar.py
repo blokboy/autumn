@@ -46,12 +46,19 @@ class CommandBar(Vertical):
         padding: 0 1;
         display: none;
     }
+    CommandBar #download-status {
+        color: #d98e4a;
+        text-opacity: 85%;
+        padding: 0 1;
+        display: none;
+    }
     CommandBar Input {
         border: none;
     }
     """
 
     def compose(self) -> ComposeResult:
+        yield Static("", id="download-status")
         yield Static("", id="queue-preview")
         yield Input(
             placeholder=": ask Autumn a question, gepa my_script.py, or gepa --run-dir examples/",
@@ -73,3 +80,15 @@ class CommandBar(Vertical):
             return
         preview.update(" | ".join(f"{i}. {_describe(item)}" for i, item in enumerate(items, start=1)))
         preview.display = True
+
+    def refresh_download_status(self, text: str | None) -> None:
+        """Reflects AutumnApp's current background model-download status
+        (#20) above the input -- e.g. "Downloading Llama 3.2 3B Instruct...
+        42%" -- or hides the line entirely once nothing is downloading."""
+        status = self.query_one("#download-status", Static)
+        if not text:
+            status.update("")
+            status.display = False
+            return
+        status.update(text)
+        status.display = True

@@ -81,6 +81,7 @@ class DashboardScreen(Screen):
         model_catalog_root: Path | None = None,
         prompt_routing_policy: PromptRoutingPolicy | None = None,
         initial_tab: str | None = None,
+        download_status: str | None = None,
         *args,
         **kwargs,
     ) -> None:
@@ -89,6 +90,7 @@ class DashboardScreen(Screen):
         self._model_catalog_root = model_catalog_root
         self._prompt_routing_policy = prompt_routing_policy
         self._initial_tab = initial_tab
+        self._download_status = download_status
         self._live_state = live_state
         self._live_run_dir = live_state.run_dir if live_state is not None else None
         self._summaries = registry.merge_live(registry.scan(self._runs_root), live_state)
@@ -133,6 +135,7 @@ class DashboardScreen(Screen):
     def on_mount(self) -> None:
         self.set_interval(_POLL_INTERVAL_SECONDS, self._poll_live_state)
         self.set_interval(_REGISTRY_POLL_INTERVAL_SECONDS, self._rescan_registry)
+        self.query_one(CommandBar).refresh_download_status(self._download_status)
 
     def action_focus_command_bar(self) -> None:
         self.query_one(CommandBar).focus_input()
@@ -169,6 +172,11 @@ class DashboardScreen(Screen):
         """Called by AutumnApp whenever `pending_queue` changes, so the bar's
         preview line always mirrors the app's actual queue state."""
         self.query_one(CommandBar).refresh_queue(items)
+
+    def refresh_download_status(self, text: str | None) -> None:
+        """Called by AutumnApp whenever its background model-download status
+        changes (#20), so the command bar's status line always mirrors it."""
+        self.query_one(CommandBar).refresh_download_status(text)
 
     def refresh_chat(
         self,

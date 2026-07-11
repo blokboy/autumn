@@ -5,7 +5,12 @@ to download and install.
 Skipping (Escape) lands on InputScreen exactly as bare `autumn` always has,
 just without a local model configured yet -- since the trigger is "the
 catalog is empty," this screen naturally reappears next launch until either
-this picker or `autumn models install` puts something in the catalog."""
+this picker or `autumn models install` puts something in the catalog.
+
+Confirming a selection (Enter) hands the picked entries straight to
+`AutumnApp.start_background_model_download` (#20), which enters the
+dashboard immediately and downloads/installs them on a background thread --
+there is no blocking progress screen in between."""
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -15,7 +20,6 @@ from textual.widgets import Footer, Label, SelectionList
 
 from curated_models import CURATED_MODELS, CuratedModel
 from screens.input_screen import InputScreen
-from screens.model_download_screen import ModelDownloadScreen
 
 
 def _row_text(entry: CuratedModel) -> str:
@@ -80,7 +84,7 @@ class ModelPickerScreen(Screen):
         if not selected:
             self.action_skip()
             return
-        self.app.switch_screen(ModelDownloadScreen(selected))
+        self.app.start_background_model_download(selected)
 
     def action_skip(self) -> None:
         self.app.switch_screen(InputScreen())
