@@ -194,16 +194,23 @@ normally.
 
 ## Future work (explicitly deferred, noted here so it isn't lost)
 
-- Background/non-blocking downloads: let the user enter the dashboard
-  immediately after picking a model, with the download completing in the
-  background and the model becoming available once done. Needs a defined
-  "default chosen but not yet runnable" state and an in-app progress
-  indicator. Deferred because it adds real state-machine complexity the
-  blocking flow avoids.
-- In-app credential entry/storage for Groq/Anthropic/OpenAI, replacing the
-  env-var-only auth.
-- Making Anthropic and OpenAI actually callable once auth exists.
-- Checksum verification and resumable downloads for the HF fetch.
+All ticketed as GitHub issues #20-#23 once the rest of this PRD shipped:
+
+- Background/non-blocking downloads ([#20](https://github.com/blokboy/autumn/issues/20)):
+  let the user enter the dashboard immediately after picking a model, with
+  the download completing in the background and the model becoming
+  available once done. Needs a defined "default chosen but not yet runnable"
+  state and an in-app progress indicator. Deferred because it adds real
+  state-machine complexity the blocking flow avoids.
+- Anthropic/OpenAI real completions via env-var auth
+  ([#21](https://github.com/blokboy/autumn/issues/21)): mirrors Groq's
+  already-shipped env-var pattern rather than waiting on in-app credentials
+  — a smaller, independent step ahead of #22.
+- In-app credential entry/storage for Groq/Anthropic/OpenAI
+  ([#22](https://github.com/blokboy/autumn/issues/22)), layered on top of
+  (not replacing) the env-var-only auth all three providers use today.
+- Checksum verification and resumable downloads for the HF fetch
+  ([#23](https://github.com/blokboy/autumn/issues/23)).
 
 ## Open questions to resolve during implementation (not blocking this PRD)
 
