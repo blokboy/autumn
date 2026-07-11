@@ -3,28 +3,31 @@
 This is catalog-visibility/gating only: whether the "groq" group and its
 three models appear in the unified catalog (`catalog.build_entries`) and
 therefore get considered by `model_router.choose_model`. It has zero
-dependency on the `groq` package -- no SDK import, no network call, just an
-environment variable read -- since actually calling Groq is a separate
-ticket's job (the runtime), as is swapping app.py's chat-answer stub for a
-real call (the integration).
+dependency on the `groq` package -- no SDK import, no network call, just a
+credential lookup (`credentials.resolve_key`, an in-app-stored key from
+`autumn keys add groq` or the `GROQ_API_KEY` env var) -- since actually
+calling Groq is a separate ticket's job (the runtime), as is swapping
+app.py's chat-answer stub for a real call (the integration).
 
 `account.is_signed_in` gates eligibility per `catalog._eligible_provider_entries`:
 a `ProviderModel` only becomes a real catalog entry if its `(provider,
 account_id)` matches a signed-in `ProviderAccount`. Here that's a simple
-"is GROQ_API_KEY set" check standing in for a real sign-in flow.
+"is there a Groq key available from either source" check standing in for a
+real sign-in flow.
 """
 
-import os
-
+from autumn import credentials
 from autumn.models import PromptRoutingPolicy, ProviderAccount, ProviderModel
 
 PROVIDER = "groq"
 ACCOUNT_ID = "default"
+ENV_VAR = "GROQ_API_KEY"
 
 
 def _is_signed_in() -> bool:
-    """True iff `GROQ_API_KEY` is set in the environment and non-empty."""
-    return bool(os.environ.get("GROQ_API_KEY"))
+    """True iff a Groq key is available -- stored via `autumn keys add groq`
+    or set as `GROQ_API_KEY` in the environment."""
+    return bool(credentials.resolve_key(PROVIDER, ENV_VAR))
 
 
 def build_policy() -> PromptRoutingPolicy:

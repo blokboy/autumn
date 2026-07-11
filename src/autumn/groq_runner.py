@@ -1,11 +1,11 @@
 """Runtime boundary for calling Groq's hosted chat completions API."""
 
-import os
 import threading
 from typing import Any, Callable, Protocol
 
 import groq
 
+from autumn import credentials
 from autumn.models import ChatMessage
 
 GROQ_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it")
@@ -35,7 +35,9 @@ class GroqRunner:
     (`generate_stream`)."""
 
     def __init__(self, *, client: GroqClient | None = None) -> None:
-        self._client = client if client is not None else groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
+        self._client = (
+            client if client is not None else groq.Groq(api_key=credentials.resolve_key("groq", "GROQ_API_KEY"))
+        )
 
     def generate(self, messages: list[ChatMessage], model_name: str) -> ChatMessage:
         payload = [{"role": message.role, "content": message.text} for message in messages]

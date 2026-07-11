@@ -1,6 +1,6 @@
 """Tests for the Groq catalog-visibility policy (gated on GROQ_API_KEY)."""
 
-from autumn import catalog, groq_policy
+from autumn import catalog, credentials, groq_policy
 
 
 def test_build_policy_signs_in_when_groq_api_key_is_set(monkeypatch, tmp_path):
@@ -45,3 +45,12 @@ def test_build_policy_is_not_signed_in_when_groq_api_key_is_empty(monkeypatch, t
 
     entries = catalog.build_entries(tmp_path / "models", policy=policy)
     assert entries == []
+
+
+def test_build_policy_signs_in_from_a_stored_key_with_no_env_var(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    credentials.set_key("groq", "stored-key")
+
+    policy = groq_policy.build_policy()
+
+    assert policy.provider_accounts[0].is_signed_in is True

@@ -31,9 +31,15 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from autumn import groq_policy, local_models, paths, registry
+from autumn import credentials, groq_policy, local_models, paths, registry
 
 _GEPA_PREFIX = "gepa "
+
+# Providers `autumn keys` knows the *names* of, for listing purposes, even
+# before they're wired up as real completion providers (see #21) -- keeps
+# `autumn keys list` showing the full expected set rather than only whatever
+# happens to already have a stored key.
+_KNOWN_PROVIDERS = ("groq", "anthropic", "openai")
 
 
 class LaunchSpecError(ValueError):
@@ -263,6 +269,30 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     remove_parser.add_argument("name", help="Installed model name to remove.")
 
+    keys_parser = subparsers.add_parser(
+        "keys",
+        help="Manage stored provider API keys (Groq, etc).",
+    )
+    keys_subparsers = keys_parser.add_subparsers(dest="keys_command")
+
+    keys_add_parser = keys_subparsers.add_parser(
+        "add",
+        help="Store an API key for a provider, overriding any env var of the same purpose.",
+    )
+    keys_add_parser.add_argument("provider", choices=_KNOWN_PROVIDERS, help="Provider to store a key for.")
+    keys_add_parser.add_argument("api_key", help="The provider's API key.")
+
+    keys_subparsers.add_parser(
+        "list",
+        help="Show which providers have a key configured (stored or via env var) -- never prints key values.",
+    )
+
+    keys_remove_parser = keys_subparsers.add_parser(
+        "remove",
+        help="Remove a stored API key for a provider (an env var, if set, still applies afterward).",
+    )
+    keys_remove_parser.add_argument("provider", choices=_KNOWN_PROVIDERS, help="Provider to remove the stored key for.")
+
     return parser
 
 
@@ -400,6 +430,39 @@ def _models(args: argparse.Namespace) -> int:
     return 1
 
 
+def _env_var_for_provider(provider: str) -> str:
+    """`groq` -> `GROQ_API_KEY`, matching the naming convention every
+    provider's own module already reads its env var by (see
+    `groq_policy.ENV_VAR`)."""
+    return f"{provider.upper()}_API_KEY"
+
+
+def _keys(args: argparse.Namespace) -> int:
+    command = args.keys_command
+
+    if command == "add":
+        credentials.set_key(args.provider, args.api_key)
+        print(f"stored a key for {args.provider}")
+        return 0
+
+    if command == "list":
+        for provider in _KNOWN_PROVIDERS:
+            configured = credentials.resolve_key(provider, _env_var_for_provider(provider)) is not None
+            print(f"{provider:<10} {'configured' if configured else 'not configured'}")
+        return 0
+
+    if command == "remove":
+        removed = credentials.remove_key(args.provider)
+        if removed:
+            print(f"removed the stored key for {args.provider}")
+        else:
+            print(f"no stored key for {args.provider}")
+        return 0
+
+    print("keys command required")
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -415,6 +478,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "models":
         return _models(args)
+
+    if args.command == "keys":
+        return _keys(args)
 
     parser.print_help()
     return 1

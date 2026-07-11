@@ -134,3 +134,14 @@ def test_groq_runner_defaults_to_a_real_groq_client_when_none_injected(monkeypat
     runner = GroqRunner()
 
     assert isinstance(runner._client, groq.Groq)
+
+
+def test_groq_runner_prefers_a_stored_key_over_the_env_var(monkeypatch):
+    from autumn import credentials
+
+    monkeypatch.setenv("GROQ_API_KEY", "from-env")
+    credentials.set_key("groq", "from-store")
+
+    runner = GroqRunner()
+
+    assert runner._client.api_key == "from-store"

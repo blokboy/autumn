@@ -192,3 +192,77 @@ def test_models_remove_deletes_installed_model(tmp_path, monkeypatch, capsys):
     assert result == 0
     assert "removed tiny" in capsys.readouterr().out
     assert local_models.list_models(catalog_root) == []
+
+
+def test_keys_add_stores_a_key(capsys):
+    from autumn import credentials
+
+    result = cli.main(["keys", "add", "groq", "gsk_abc123"])
+
+    assert result == 0
+    assert "stored a key for groq" in capsys.readouterr().out
+    assert credentials.get_key("groq") == "gsk_abc123"
+
+
+def test_keys_add_rejects_unknown_provider(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["keys", "add", "made-up-provider", "some-key"])
+
+
+def test_keys_list_shows_configured_and_not_configured(monkeypatch, capsys):
+    from autumn import credentials
+
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    credentials.set_key("groq", "gsk_abc123")
+
+    result = cli.main(["keys", "list"])
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "groq       configured" in output
+    assert "anthropic  not configured" in output
+    assert "openai     not configured" in output
+
+
+def test_keys_list_reflects_env_var_without_any_stored_key(monkeypatch, capsys):
+    monkeypatch.setenv("GROQ_API_KEY", "from-env")
+
+    result = cli.main(["keys", "list"])
+
+    assert result == 0
+    assert "groq       configured" in capsys.readouterr().out
+
+
+def test_keys_remove_deletes_a_stored_key(capsys):
+    from autumn import credentials
+
+    credentials.set_key("groq", "gsk_abc123")
+
+    result = cli.main(["keys", "remove", "groq"])
+
+    assert result == 0
+    assert "removed the stored key for groq" in capsys.readouterr().out
+    assert credentials.get_key("groq") is None
+
+
+def test_keys_remove_reports_when_nothing_was_stored(capsys):
+    result = cli.main(["keys", "remove", "groq"])
+
+    assert result == 0
+    assert "no stored key for groq" in capsys.readouterr().out
+
+
+def test_keys_remove_does_not_affect_env_var_fallback(monkeypatch, capsys):
+    from autumn import credentials
+
+    monkeypatch.setenv("GROQ_API_KEY", "from-env")
+    credentials.set_key("groq", "from-store")
+
+    cli.main(["keys", "remove", "groq"])
+    capsys.readouterr()
+    result = cli.main(["keys", "list"])
+
+    assert result == 0
+    assert "groq       configured" in capsys.readouterr().out
