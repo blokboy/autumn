@@ -363,6 +363,9 @@ class GroqRunner:
                 else None
             )
             if recovered_tool_call is not None:
+                if not self._can_execute_tool_call(recovered_tool_call):
+                    self._stream_completion(payload, model_name, on_chunk=on_chunk, cancel_event=cancel_event)
+                    return
                 self._run_tool_call_round(
                     recovered_tool_call,
                     SimpleNamespace(content=None),
@@ -396,6 +399,10 @@ class GroqRunner:
             on_status=on_status,
             on_citation=on_citation,
         )
+
+    def _can_execute_tool_call(self, tool_call: Any) -> bool:
+        name = tool_call.function.name
+        return name in self._tool_executors or name in _MUTATING_TOOLS_BY_NAME
 
     def _run_tool_call_round(
         self,

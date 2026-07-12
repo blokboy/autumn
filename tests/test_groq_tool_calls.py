@@ -295,6 +295,31 @@ def test_generate_stream_recovers_search_docs_call_from_groq_tool_use_failed(tmp
     assert "README.md" in second_messages[2]["content"]
 
 
+def test_generate_stream_treats_unknown_failed_generation_tool_as_plain_response(tmp_path):
+    stream_response = _FakeStream([_chunk("Autumn is a CLI for working with GEPA runs.")])
+    client = _ToolUseFailedThenStreamingGroqClient(
+        '<function=explain_autumn{"topic": "Autumn"}</function>',
+        stream_response,
+    )
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    received: list[str] = []
+    statuses: list[str] = []
+    runner.generate_stream(
+        [ChatMessage(role="user", text="Can you explain Autumn?")],
+        "llama-3.3-70b-versatile",
+        on_chunk=received.append,
+        on_status=statuses.append,
+    )
+
+    assert received == ["Autumn is a CLI for working with GEPA runs."]
+    assert statuses == []
+    assert len(client.seen_calls) == 2
+    assert client.seen_calls[1]["stream"] is True
+    assert client.seen_calls[1]["tools"] is None
+    assert client.seen_calls[1]["messages"] == [{"role": "user", "content": "Can you explain Autumn?"}]
+
+
 def test_search_web_schema_is_not_offered_without_tavily_key_even_with_trigger(tmp_path, monkeypatch):
     monkeypatch.setattr("groq_runner.credentials.resolve_key", lambda provider, env_var: None)
     decision = _no_tool_call_decision("hi")
