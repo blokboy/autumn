@@ -6,25 +6,33 @@ presses to the focused widget first, so as long as nothing has focused the
 bar's Input, those keys never reach it and bubble straight up to the screen's
 own bindings. `:` (bound on DashboardScreen) calls `focus_input()` to enter
 "command mode"; from then on keystrokes go to the Input like any text field,
-which is the whole point -- typing `gepa myscript.py` shouldn't also fire `q`
+which is the whole point -- typing `gepa run myscript.py` shouldn't also fire `q`
 for every letter that happens to collide with a binding.
 
 Submitting a line hands the raw text to `AutumnApp.submit_command`, which owns
-the launch-vs-queue decision for `gepa ...` commands and the shared chat
+the launch-vs-queue decision for `gepa run ...` commands and the shared chat
 prompt flow for everything else -- this widget only renders input and an
 ordered preview of whatever queue AutumnApp currently holds, via
 `refresh_queue`.
 """
 
+import queue_store
 from cli import LaunchSpec
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.widgets import Input, Static
 
 
 def _describe(item) -> str:
+    if isinstance(item, queue_store.ScriptQueueItem):
+        return f"gepa run {item.script_path.name}" + (" --dry-run" if item.dry_run else "")
     if isinstance(item, LaunchSpec):
-        return f"gepa {item.script_path.name}" + (" --dry-run" if item.dry_run else "")
+        return f"gepa run {item.script_path.name}" + (" --dry-run" if item.dry_run else "")
+    if isinstance(item, queue_store.ChatQueueItem):
+        return item.text
+    if isinstance(item, queue_store.PromptOptimizationQueueItem):
+        return f"gepa optimize {item.spec.run_name}"
     return item
 
 
@@ -61,7 +69,7 @@ class CommandBar(Vertical):
         yield Static("", id="download-status")
         yield Static("", id="queue-preview")
         yield Input(
-            placeholder=": ask Autumn a question, gepa my_script.py, or gepa --run-dir examples/",
+            placeholder=": ask Autumn, gepa run my_script.py, or gepa optimize ...",
             id="command-bar-input",
         )
 
@@ -73,7 +81,10 @@ class CommandBar(Vertical):
         self.app.submit_command(event.value)
 
     def refresh_queue(self, items: list) -> None:
-        preview = self.query_one("#queue-preview", Static)
+        try:
+            preview = self.query_one("#queue-preview", Static)
+        except NoMatches:
+            return
         if not items:
             preview.update("")
             preview.display = False

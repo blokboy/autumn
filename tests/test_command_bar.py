@@ -1,5 +1,5 @@
 """Behavioral tests for DashboardScreen's CommandBar and AutumnApp's
-in-memory run queue (`:` to focus, `gepa ...` launch-vs-queue branching,
+in-memory run queue (`:` to focus, `gepa run` launch-vs-queue branching,
 auto-advance on completion, queued prompt auto-advance), via Textual's Pilot
 harness against a real AutumnApp.
 
@@ -61,7 +61,7 @@ async def test_command_bar_copy_invites_chat_or_gepa(tmp_path):
 
         bar_input = app.screen.query_one(CommandBar).query_one(Input)
 
-        assert bar_input.placeholder == ": ask Autumn a question, gepa my_script.py, or gepa --run-dir examples/"
+        assert bar_input.placeholder == ": ask Autumn, gepa run my_script.py, or gepa optimize ..."
         assert "stub" not in bar_input.placeholder.lower()
 
 
@@ -90,7 +90,7 @@ async def test_gepa_command_via_bar_launches_immediately_when_no_run_live(tmp_pa
         await pilot.pause()
 
         await _type_and_submit(
-            pilot, f"gepa {script} --name bar-launch --run-dir {run_dir}"
+            pilot, f"gepa run {script} --name bar-launch --run-dir {run_dir}"
         )
 
         assert isinstance(app.screen, DashboardScreen)
@@ -120,7 +120,7 @@ async def test_gepa_command_via_bar_queues_while_a_run_is_live(tmp_path):
         assert app.state.status is RunStatus.RUNNING
 
         await _type_and_submit(
-            pilot, f"gepa {second_script} --name second --run-dir {tmp_path / 'second'}"
+            pilot, f"gepa run {second_script} --name second --run-dir {tmp_path / 'second'}"
         )
 
         # Queued, not launched: the live run is still "first".
@@ -154,7 +154,7 @@ async def test_queue_auto_advances_when_live_run_finishes(tmp_path):
         assert app.state.status is RunStatus.RUNNING
 
         await _type_and_submit(
-            pilot, f"gepa {queued_script} --name second --run-dir {tmp_path / 'second'}"
+            pilot, f"gepa run {queued_script} --name second --run-dir {tmp_path / 'second'}"
         )
         assert len(app.pending_queue) == 1
 
@@ -214,9 +214,46 @@ async def test_bad_gepa_syntax_via_bar_shows_error_and_does_not_queue(tmp_path):
         await pilot.press("enter")  # -> browse DashboardScreen, no run live
         await pilot.pause()
 
-        await _type_and_submit(pilot, f"gepa {script} --bogus-flag")
+        await _type_and_submit(pilot, f"gepa run {script} --bogus-flag")
 
         assert app.pending_queue == []
         assert app.state is None
         notifications = list(app._notifications)
         assert any(n.severity == "error" for n in notifications)
+
+
+async def test_bare_gepa_script_via_bar_shows_mode_guidance(tmp_path):
+    script = tmp_path / "demo_script.py"
+    script.write_text("pass\n")
+
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await _type_and_submit(pilot, f"gepa {script}")
+
+        assert app.pending_queue == []
+        assert app.state is None
+        notifications = list(app._notifications)
+        assert any("gepa run <script.py>" in str(n.message) for n in notifications)
+
+
+async def test_gepa_optimize_via_bar_is_prompt_optimization_draft(tmp_path):
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await _type_and_submit(pilot, "gepa optimize --prompt 'Write a summary'")
+
+        assert app.pending_queue == []
+        assert app.state is None
+        assert app.chat_messages == []
+        notifications = list(app._notifications)
+        assert any(
+            n.severity == "information" and "Prompt optimization draft recognized" in str(n.message)
+            for n in notifications
+        )

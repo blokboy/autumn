@@ -1,5 +1,5 @@
 """Tests for the launch-spec parsing shared between `autumn run` and
-InputScreen's `gepa ...` command (cli.parse_gepa_command /
+InputScreen's `gepa run ...` command (cli.parse_gepa_command /
 build_launch_spec), plus a regression check that `autumn run`/`autumn runs`
 keep behaving exactly as before the InputScreen refactor.
 """
@@ -10,7 +10,7 @@ import pytest
 
 import cli
 import local_models
-from cli import LaunchSpecError, parse_gepa_command
+from cli import LaunchSpecError, PromptOptimizationDraft, parse_command_line, parse_gepa_command
 
 
 def test_parse_gepa_command_valid_minimal(tmp_path):
@@ -25,6 +25,36 @@ def test_parse_gepa_command_valid_minimal(tmp_path):
     assert spec.dry_run is False
     assert spec.run_name.startswith("script-")
     assert spec.run_dir == cli.paths.default_runs_root() / spec.run_name
+
+
+def test_parse_command_line_gepa_run_launches_script(tmp_path):
+    script = tmp_path / "script.py"
+    script.write_text("pass\n")
+
+    specs = parse_command_line(f"gepa run {script} --dry-run --name split-run")
+
+    assert specs is not None
+    assert len(specs) == 1
+    assert specs[0].script_path == script
+    assert specs[0].dry_run is True
+    assert specs[0].run_name == "split-run"
+
+
+def test_parse_command_line_gepa_optimize_returns_prompt_draft():
+    draft = parse_command_line("gepa optimize --prompt 'Write a better summary' --name summary")
+
+    assert draft == PromptOptimizationDraft(
+        raw_text="gepa optimize --prompt 'Write a better summary' --name summary",
+        tokens=("--prompt", "Write a better summary", "--name", "summary"),
+    )
+
+
+def test_parse_command_line_rejects_bare_gepa_script_with_guidance(tmp_path):
+    script = tmp_path / "script.py"
+    script.write_text("pass\n")
+
+    with pytest.raises(LaunchSpecError, match="gepa run <script.py>"):
+        parse_command_line(f"gepa {script}")
 
 
 def test_parse_gepa_command_valid_with_all_flags(tmp_path):

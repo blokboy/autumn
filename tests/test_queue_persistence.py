@@ -16,6 +16,13 @@ import chat_store, queue_store
 from app import AutumnApp
 from cli import LaunchSpec
 from models import ChatMessage, RunStatus
+from prompt_optimization_contracts import (
+    BuiltInMetricRef,
+    EvalAssetRef,
+    ModelIdentity,
+    PromptOptimizationSpec,
+    PromptOptimizationSpecBudget,
+)
 from screens.confirm_screen import ConfirmScreen
 from screens.dashboard_screen import DashboardScreen
 from screens.input_screen import InputScreen
@@ -30,6 +37,19 @@ def _dead_pid() -> int:
 
 def _write_sleepy_script(path: Path, seconds: float) -> None:
     path.write_text(f"import time\ntime.sleep({seconds})\n")
+
+
+def _prompt_optimization_spec(name: str) -> PromptOptimizationSpec:
+    return PromptOptimizationSpec(
+        prompt="Classify the support ticket.",
+        system_prompt=None,
+        task_model=ModelIdentity(name="llama-3.1-8b", backend="llama.cpp"),
+        optimizer_model=ModelIdentity(name="gpt-4.1", backend="openai", provider="openai"),
+        eval_asset=EvalAssetRef(asset_id="support-tickets", version="2026-07-12"),
+        metric=BuiltInMetricRef(metric_id="exact_match"),
+        run_name=name,
+        budget=PromptOptimizationSpecBudget(max_metric_calls=20),
+    )
 
 
 async def test_append_persists_to_this_sessions_file(tmp_path):
@@ -51,14 +71,14 @@ async def test_append_persists_to_this_sessions_file(tmp_path):
         await pilot.pause()
         assert app.state.status is RunStatus.RUNNING
 
-        app.submit_command(f"gepa {second_script} --name second --run-dir {tmp_path / 'second'}")
+        app.submit_command(f"gepa run {second_script} --name second --run-dir {tmp_path / 'second'}")
         await pilot.pause()
 
         assert app._queue_session_path.exists()
         payload = json.loads(app._queue_session_path.read_text())
         assert payload["items"] == [
             {
-                "kind": "gepa",
+                "kind": "script",
                 "run_name": "second",
                 "run_dir": str(tmp_path / "second"),
                 "script_path": str(second_script),
@@ -128,7 +148,7 @@ async def test_resume_merges_leftover_sessions_and_auto_launches_first_item(tmp_
         assert app.pending_queue == ["a queued prompt"]
         assert app._queue_session_path.exists()
         assert json.loads(app._queue_session_path.read_text())["items"] == [
-            {"kind": "prompt", "text": "a queued prompt"}
+            {"kind": "chat", "text": "a queued prompt"}
         ]
 
         # The old leftover files were consumed by the merge either way.
@@ -227,6 +247,37 @@ async def test_resume_merges_leftover_queue_and_chat_into_current_sessions(tmp_p
         assert chat_store.load_chat(app._chat_session_path) == app.chat_messages
         assert not queue_leftover.exists()
         assert not chat_leftover.exists()
+
+
+async def test_resume_recovers_typed_prompt_optimization_queue_item_in_order(tmp_path):
+    queue_sessions_root = tmp_path / "queue-sessions"
+    queue_leftover = queue_store.session_path(queue_sessions_root, "queue-leftover")
+    optimization = queue_store.PromptOptimizationQueueItem(_prompt_optimization_spec("optimize-priority"))
+    queue_store.persist_queue(
+        queue_leftover,
+        [
+            queue_store.ChatQueueItem("queued prompt"),
+            optimization,
+        ],
+        pid=_dead_pid(),
+    )
+
+    app = AutumnApp(
+        runs_root=tmp_path,
+        queue_sessions_root=queue_sessions_root,
+        chat_sessions_root=tmp_path / "chat-sessions",
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+
+        await pilot.press("y")
+        await pilot.pause()
+        await pilot.pause(0.2)
+
+        assert app.pending_queue == [optimization]
+        assert queue_store.load_typed_queue(app._queue_session_path) == [optimization]
+        assert not queue_leftover.exists()
 
 
 async def test_start_fresh_deletes_leftover_chat_and_does_not_seed_current_session(tmp_path):

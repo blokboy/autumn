@@ -11,6 +11,13 @@ from pathlib import Path
 
 import queue_store
 from cli import LaunchSpec
+from prompt_optimization_contracts import (
+    BuiltInMetricRef,
+    EvalAssetRef,
+    ModelIdentity,
+    PromptOptimizationSpec,
+    PromptOptimizationSpecBudget,
+)
 
 
 def _dead_pid() -> int:
@@ -26,6 +33,19 @@ def _spec(name: str, tmp_path: Path) -> LaunchSpec:
         run_dir=tmp_path / name,
         script_path=tmp_path / f"{name}.py",
         dry_run=True,
+    )
+
+
+def _prompt_optimization_spec(name: str) -> PromptOptimizationSpec:
+    return PromptOptimizationSpec(
+        prompt="Classify the support ticket.",
+        system_prompt=None,
+        task_model=ModelIdentity(name="llama-3.1-8b", backend="llama.cpp"),
+        optimizer_model=ModelIdentity(name="gpt-4.1", backend="openai", provider="openai"),
+        eval_asset=EvalAssetRef(asset_id="support-tickets", version="2026-07-12"),
+        metric=BuiltInMetricRef(metric_id="exact_match"),
+        run_name=name,
+        budget=PromptOptimizationSpecBudget(max_metric_calls=20),
     )
 
 
@@ -72,6 +92,42 @@ def test_load_queue_roundtrips_launchspec_and_prompt(tmp_path):
     assert loaded == [spec, "prompt text"]
 
 
+def test_load_typed_queue_roundtrips_script_chat_and_prompt_optimization(tmp_path):
+    path = tmp_path / "session.json"
+    script = queue_store.ScriptQueueItem(_spec("script-run", tmp_path))
+    chat = queue_store.ChatQueueItem("explain the latest run")
+    optimization = queue_store.PromptOptimizationQueueItem(_prompt_optimization_spec("optimize-priority"))
+
+    queue_store.persist_queue(path, [script, chat, optimization], pid=4242)
+
+    assert queue_store.load_typed_queue(path) == [script, chat, optimization]
+    assert json.loads(path.read_text())["items"] == [
+        {
+            "kind": "script",
+            "run_name": "script-run",
+            "run_dir": str(tmp_path / "script-run"),
+            "script_path": str(tmp_path / "script-run.py"),
+            "dry_run": True,
+        },
+        {"kind": "chat", "text": "explain the latest run"},
+        {
+            "kind": "prompt_optimization",
+            "spec": _prompt_optimization_spec("optimize-priority").to_dict(),
+        },
+    ]
+
+
+def test_load_typed_queue_recovers_legacy_launchspec_and_prompt_items(tmp_path):
+    path = tmp_path / "session.json"
+    spec = _spec("legacy-run", tmp_path)
+    queue_store.persist_queue(path, [spec, "legacy prompt"], pid=4242)
+
+    assert queue_store.load_typed_queue(path) == [
+        queue_store.ScriptQueueItem(spec),
+        queue_store.ChatQueueItem("legacy prompt"),
+    ]
+
+
 def test_load_queue_missing_file_returns_empty(tmp_path):
     assert queue_store.load_queue(tmp_path / "does-not-exist.json") == []
 
@@ -91,6 +147,7 @@ def test_load_queue_drops_malformed_entries_but_keeps_the_rest(tmp_path):
                 "items": [
                     {"kind": "prompt", "text": "keep me"},
                     {"kind": "gepa", "run_name": "missing-fields"},
+                    {"kind": "prompt_optimization", "spec": {"schema_version": 1}},
                     {"kind": "unknown-kind"},
                     "not even a dict",
                 ],
@@ -150,6 +207,22 @@ def test_load_and_merge_concatenates_in_order(tmp_path):
 
     merged = queue_store.load_and_merge([first, second])
     assert merged == ["one", "two", _spec("three", tmp_path)]
+
+
+def test_load_and_merge_typed_queue_concatenates_in_order(tmp_path):
+    sessions_root = tmp_path / "sessions"
+    first = queue_store.session_path(sessions_root, "first")
+    second = queue_store.session_path(sessions_root, "second")
+    optimization = queue_store.PromptOptimizationQueueItem(_prompt_optimization_spec("optimize"))
+    queue_store.persist_queue(first, [queue_store.ChatQueueItem("one"), optimization], pid=1)
+    queue_store.persist_queue(second, [queue_store.ScriptQueueItem(_spec("three", tmp_path))], pid=2)
+
+    merged = queue_store.load_and_merge_typed([first, second])
+    assert merged == [
+        queue_store.ChatQueueItem("one"),
+        optimization,
+        queue_store.ScriptQueueItem(_spec("three", tmp_path)),
+    ]
 
 
 def test_delete_files_removes_existing_and_tolerates_missing(tmp_path):

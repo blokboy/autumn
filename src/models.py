@@ -7,6 +7,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
+from prompt_optimization_contracts import PromptOptimizationSpec
+
 
 class RunStatus(str, Enum):
     """Lifecycle state of a GEPA optimization run."""
@@ -222,3 +224,15 @@ class LiveRunSpec:
     script_path: Path
     run_dir: Path
     run_name: str
+
+
+@dataclass
+class PromptOptimizationRunSpec:
+    """Parameters needed to launch a first-class prompt optimization run."""
+
+    optimization_spec: PromptOptimizationSpec
+    run_dir: Path
+
+    @property
+    def run_name(self) -> str:
+        return self.optimization_spec.run_name

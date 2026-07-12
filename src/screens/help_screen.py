@@ -50,7 +50,7 @@ class HelpScreen(ModalScreen):
             yield Label("Run control", classes="help-heading")
             yield Label("Q (shift+q)    Send graceful stop signal to the current run")
             yield Label("r    Resume a stopped/failed run")
-            yield Label(":    Focus the command bar (launch or queue a gepa run)")
+            yield Label(":    Focus the command bar (gepa run / gepa optimize / chat)")
             yield Label("q    Quit (confirms first if a run is active)")
 
             yield Label("General", classes="help-heading")

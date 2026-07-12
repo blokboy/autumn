@@ -16,14 +16,62 @@ import runpy
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 import patch
 from dashboard_callback import DashboardCallback
-from models import LiveRunSpec, RunKind
+from models import LiveRunSpec, PromptOptimizationRunSpec, RunKind
+from prompt_optimization_contracts import PromptOptimizationSpec
 
 
-def launch(dashboard: DashboardCallback, spec: LiveRunSpec) -> threading.Thread:
-    """Starts `spec.script_path` on a daemon thread with GEPA patched in first.
+class PromptOptimizationRuntime(Protocol):
+    def __call__(
+        self,
+        *,
+        dashboard: DashboardCallback,
+        optimization_spec: PromptOptimizationSpec,
+        run_dir: Path,
+    ) -> None: ...
+
+
+RunTarget = LiveRunSpec | PromptOptimizationRunSpec
+
+
+def _unsupported_prompt_optimization_runtime(
+    *,
+    dashboard: DashboardCallback,
+    optimization_spec: PromptOptimizationSpec,
+    run_dir: Path,
+) -> None:
+    raise RuntimeError("prompt optimization runtime is not configured")
+
+
+def _prepare_run_dir(run_dir: Path) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    # A prior graceful stop (the `Q` keybinding) leaves `gepa.stop` behind --
+    # GEPA's FileStopper checks for its existence but never removes it itself
+    # (confirmed against source: `FileStopper.remove_stop_file` exists but is
+    # never called by gepa.optimize/optimize_anything). Without clearing it
+    # here, resuming (`r`) would have GEPA see the stale file on its very
+    # first check and halt again immediately instead of actually resuming.
+    stop_file = run_dir / "gepa.stop"
+    if stop_file.exists():
+        stop_file.unlink()
+    (run_dir / "autumn.pid").write_text(str(os.getpid()))
+
+
+def _write_meta(run_dir: Path, meta: dict) -> None:
+    meta["launched_at"] = datetime.now().isoformat()
+    (run_dir / "autumn_meta.json").write_text(json.dumps(meta))
+
+
+def launch(
+    dashboard: DashboardCallback,
+    spec: RunTarget,
+    *,
+    prompt_optimization_runtime: PromptOptimizationRuntime = _unsupported_prompt_optimization_runtime,
+) -> threading.Thread:
+    """Starts a script or prompt optimization run on a daemon thread.
 
     Writes `autumn.pid` and `autumn_meta.json` into `spec.run_dir` before the
     thread's work begins, so a run directory is immediately recognizable by
@@ -32,39 +80,61 @@ def launch(dashboard: DashboardCallback, spec: LiveRunSpec) -> threading.Thread:
     Returns the already-started `Thread` -- a function named `launch` should
     leave nothing for the caller to remember to kick off.
     """
-    spec.run_dir.mkdir(parents=True, exist_ok=True)
-    # A prior graceful stop (the `Q` keybinding) leaves `gepa.stop` behind --
-    # GEPA's FileStopper checks for its existence but never removes it itself
-    # (confirmed against source: `FileStopper.remove_stop_file` exists but is
-    # never called by gepa.optimize/optimize_anything). Without clearing it
-    # here, resuming (`r`) would have GEPA see the stale file on its very
-    # first check and halt again immediately instead of actually resuming.
-    stop_file = spec.run_dir / "gepa.stop"
-    if stop_file.exists():
-        stop_file.unlink()
-    (spec.run_dir / "autumn.pid").write_text(str(os.getpid()))
-    meta = {
-        "run_kind": RunKind.SCRIPT.value,
-        "script_path": str(spec.script_path),
-        "run_name": spec.run_name,
-        "launched_at": datetime.now().isoformat(),
-    }
-    (spec.run_dir / "autumn_meta.json").write_text(json.dumps(meta))
+    if isinstance(spec, LiveRunSpec):
+        _prepare_run_dir(spec.run_dir)
+        _write_meta(
+            spec.run_dir,
+            {
+                "run_kind": RunKind.SCRIPT.value,
+                "script_path": str(spec.script_path),
+                "run_name": spec.run_name,
+            },
+        )
 
-    def run() -> None:
-        exc: BaseException | None = None
-        try:
-            # patch.apply() must complete before runpy.run_path() starts: the
-            # user's script's own `import gepa` / `from gepa import optimize`
-            # lines execute *during* run_path, so as long as the patch is
-            # already in place before that call, the unmodified script picks
-            # up the patched functions with zero changes on its end.
-            patch.apply(dashboard, spec.run_dir)
-            runpy.run_path(str(spec.script_path), run_name="__main__")
-        except BaseException as caught:  # noqa: BLE001 - must catch SystemExit/KeyboardInterrupt too
-            exc = caught
-        finally:
-            dashboard.mark_script_finished(exc)
+        def run() -> None:
+            exc: BaseException | None = None
+            try:
+                # patch.apply() must complete before runpy.run_path() starts: the
+                # user's script's own `import gepa` / `from gepa import optimize`
+                # lines execute *during* run_path, so as long as the patch is
+                # already in place before that call, the unmodified script picks
+                # up the patched functions with zero changes on its end.
+                patch.apply(dashboard, spec.run_dir)
+                runpy.run_path(str(spec.script_path), run_name="__main__")
+            except BaseException as caught:  # noqa: BLE001 - must catch SystemExit/KeyboardInterrupt too
+                exc = caught
+            finally:
+                dashboard.mark_script_finished(exc)
+
+    elif isinstance(spec, PromptOptimizationRunSpec):
+        _prepare_run_dir(spec.run_dir)
+        _write_meta(
+            spec.run_dir,
+            {
+                "run_kind": RunKind.PROMPT_OPTIMIZATION.value,
+                "run_name": spec.run_name,
+                "prompt_optimization_spec": spec.optimization_spec.to_dict(),
+            },
+        )
+
+        def run() -> None:
+            exc: BaseException | None = None
+            try:
+                prompt_optimization_runtime(
+                    dashboard=dashboard,
+                    optimization_spec=spec.optimization_spec,
+                    run_dir=spec.run_dir,
+                )
+            except BaseException as caught:  # noqa: BLE001 - must catch SystemExit/KeyboardInterrupt too
+                exc = caught
+            finally:
+                dashboard.mark_script_finished(exc)
+
+    else:
+        def run() -> None:
+            dashboard.mark_script_finished(
+                TypeError(f"unsupported run target: {type(spec).__name__}")
+            )
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()  # "launch" implies started, not merely constructed

@@ -4,11 +4,12 @@ Three behaviors, all decided from one submitted line of text:
 
 - Empty Enter -> browse mode (`AutumnApp.enter_browse_mode`), same as bare
   `autumn` used to land on directly before this screen existed.
-- `gepa <script> [--dry-run] [--name ...] [--run-dir ...]` or
-  `gepa --run-dir <directory>` -> parsed via
+- `gepa run <script> [--dry-run] [--name ...] [--run-dir ...]` or
+  `gepa run --run-dir <directory>` -> parsed via
   `cli.parse_command_line` (shared with `DashboardScreen`'s CommandBar,
   so the two surfaces can't drift) and handed to AutumnApp to launch
   identically to `autumn run`.
+- `gepa optimize ...` -> handed off as a prompt-optimization draft.
 - Anything else non-empty -> a shared Autumn chat prompt, shown on the
   dashboard and answered by the available local/fallback model path.
 
@@ -23,7 +24,7 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Input, Label
 
-from cli import LaunchSpecError, parse_command_line
+from cli import LaunchSpecError, PromptOptimizationDraft, parse_command_line
 from widgets.deer_sprite import DeerSprite
 
 # Keys that should act as the app-level shortcuts advertised in the landing
@@ -143,6 +144,9 @@ class InputScreen(Screen):
 
         if specs is None:
             self.app.open_chat_prompt(text)
+            return
+        if isinstance(specs, PromptOptimizationDraft):
+            self.app.start_prompt_optimization_draft(specs)
             return
 
         self.app.launch_gepa_runs(specs)

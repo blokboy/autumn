@@ -14,9 +14,10 @@ Three modes:
 - `autumn` (no subcommand) opens the dashboard on the InputScreen landing
   screen: an empty Enter drops into browse mode (no live run, just
   `registry.scan(paths.default_runs_root())` rendered through the same
-  sidebar + tabs as launch mode, fully navigable); a `gepa <script> ...`
-  command parses with the exact same grammar as `autumn run` (see
-  `_add_run_arguments`/`parse_gepa_command` below) and launches identically.
+  sidebar + tabs as launch mode, fully navigable); `gepa run <script> ...`
+  parses with the exact same grammar as `autumn run` (see
+  `_add_run_arguments`/`parse_gepa_command` below) and launches identically,
+  while `gepa optimize ...` is routed to a prompt-optimization draft handoff.
 - `autumn runs [--json]` is the non-interactive counterpart to bare `autumn`:
   it prints the same registry scan as a plain-text table (or `--json` for a
   JSON array) and exits, without ever opening Textual -- so it must not import
@@ -34,7 +35,8 @@ from pathlib import Path
 import anthropic_policy, config, credentials, groq_policy, local_models, openai_policy, paths, registry
 from models import PromptRoutingPolicy
 
-_GEPA_PREFIX = "gepa "
+_GEPA_COMMAND = "gepa"
+_GEPA_MODE_GUIDANCE = "Use `gepa run <script.py>` to launch a script run, or `gepa optimize ...` to start prompt optimization."
 
 # `credentials.KNOWN_PROVIDERS` is the single source of truth for the known
 # provider set -- shared with the `list_keys` chat tool (see
@@ -43,7 +45,7 @@ _KNOWN_PROVIDERS = credentials.KNOWN_PROVIDERS
 
 
 class LaunchSpecError(ValueError):
-    """Raised by `parse_gepa_command` on invalid `gepa ...` input (bad flags,
+    """Raised by `parse_gepa_command` on invalid `gepa run ...` input (bad flags,
     missing/nonexistent script path) -- a plain exception rather than
     argparse's default SystemExit, since InputScreen needs to catch this and
     show a notification instead of taking down the Textual event loop."""
@@ -52,7 +54,7 @@ class LaunchSpecError(ValueError):
 class _RaisingArgumentParser(argparse.ArgumentParser):
     """argparse.ArgumentParser.error() prints usage to stderr and calls
     sys.exit(2) -- correct for the `autumn run` CLI subcommand, fatal if it
-    ever escaped from inside InputScreen's `gepa ...` parsing. This subclass
+    ever escaped from inside InputScreen's GEPA command parsing. This subclass
     is used only for that in-app parsing path; raising LaunchSpecError lets
     the screen catch it and stay put."""
 
@@ -62,7 +64,7 @@ class _RaisingArgumentParser(argparse.ArgumentParser):
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     """Grammar shared between `autumn run` (via `_build_parser`) and
-    InputScreen's `gepa <script> ...` parsing (via `parse_gepa_command`), so
+    InputScreen's `gepa run <script> ...` parsing (via `parse_gepa_command`), so
     the two entry points can never drift apart."""
     parser.add_argument(
         "script",
@@ -95,7 +97,7 @@ def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
 class LaunchSpec:
     """Fully-resolved parameters for launching a live GEPA run: the shared
     output of both `autumn run`'s argparse namespace and InputScreen's
-    `gepa ...` parsing, ready to hand to `AutumnApp`/`AutumnApp.launch_gepa_run`."""
+    `gepa run ...` parsing, ready to hand to `AutumnApp`/`AutumnApp.launch_gepa_run`."""
 
     run_name: str
     run_dir: Path
@@ -103,11 +105,24 @@ class LaunchSpec:
     dry_run: bool
 
 
+@dataclass(frozen=True)
+class PromptOptimizationDraft:
+    """Parsed handoff for first-class prompt optimization commands.
+
+    Later confirmation/runtime work owns validating these tokens into the
+    durable prompt optimization spec. For now this separates `gepa optimize`
+    from both chat prompts and script launches.
+    """
+
+    raw_text: str
+    tokens: tuple[str, ...]
+
+
 def build_launch_spec(args: argparse.Namespace) -> LaunchSpec:
     """Resolves an argparse Namespace produced by `_add_run_arguments`
     (deriving the run name and default run_dir when not explicitly given) into
     a `LaunchSpec` -- the same derivation `_run` has always done, now shared
-    with InputScreen's `gepa ...` parsing."""
+    with InputScreen's `gepa run ...` parsing."""
     script_path = Path(args.script)
     run_name = args.name or paths.derive_run_name(script_path)
     run_dir = Path(args.run_dir) if args.run_dir else paths.default_runs_root() / run_name
@@ -155,7 +170,7 @@ def build_launch_specs(args: argparse.Namespace) -> list[LaunchSpec]:
 
 
 def parse_gepa_command(tokens: list[str]) -> list[LaunchSpec]:
-    """Parses the tokens following a `gepa ` prefix typed into InputScreen
+    """Parses the tokens following a `gepa run` prefix typed into InputScreen
     (e.g. `["myscript.py", "--dry-run"]`) with the exact same grammar as
     `autumn run` (`_add_run_arguments`), then resolves them into one or more
     `LaunchSpec`s exactly as `build_launch_specs` does for the CLI.
@@ -176,10 +191,10 @@ def parse_gepa_command(tokens: list[str]) -> list[LaunchSpec]:
     return specs
 
 
-def parse_command_line(text: str) -> list[LaunchSpec] | None:
+def parse_command_line(text: str) -> list[LaunchSpec] | PromptOptimizationDraft | None:
     """Parses one submitted line of free text from either InputScreen or
     CommandBar into one or more `LaunchSpec`s, or `None` if it isn't a
-    `gepa ...` command at all (a chat prompt) -- the shared classification both
+    `gepa` command at all (a chat prompt) -- the shared classification both
     surfaces use so they can't drift apart on what counts as a launch command.
 
     `text` is assumed already stripped and non-empty (both callers handle the
@@ -191,14 +206,27 @@ def parse_command_line(text: str) -> list[LaunchSpec] | None:
     quotes, unknown flags, a missing/nonexistent script path -- exactly as
     `parse_gepa_command` does, so callers only need one except clause.
     """
-    if not text.startswith(_GEPA_PREFIX):
-        return None
-    remainder = text[len(_GEPA_PREFIX) :]
     try:
-        tokens = shlex.split(remainder)
-    except ValueError as exc:  # unbalanced quotes, e.g. `gepa "foo`
-        raise LaunchSpecError(f"Couldn't parse command: {exc}") from exc
-    return parse_gepa_command(tokens)
+        command_tokens = shlex.split(text)
+    except ValueError as exc:  # unbalanced quotes, e.g. `gepa run "foo`
+        if text.lstrip().startswith(_GEPA_COMMAND):
+            raise LaunchSpecError(f"Couldn't parse command: {exc}") from exc
+        return None
+
+    if not command_tokens or command_tokens[0] != _GEPA_COMMAND:
+        return None
+    if len(command_tokens) == 1:
+        raise LaunchSpecError(_GEPA_MODE_GUIDANCE)
+
+    mode = command_tokens[1]
+    mode_tokens = command_tokens[2:]
+    if mode == "run":
+        return parse_gepa_command(mode_tokens)
+    if mode == "optimize":
+        if not mode_tokens:
+            raise LaunchSpecError("Prompt optimization details are required after `gepa optimize`.")
+        return PromptOptimizationDraft(raw_text=text, tokens=tuple(mode_tokens))
+    raise LaunchSpecError(_GEPA_MODE_GUIDANCE)
 
 
 def _build_parser() -> argparse.ArgumentParser:

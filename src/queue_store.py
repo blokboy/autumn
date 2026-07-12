@@ -7,10 +7,9 @@ normal quit, a crash, or `kill -9` never loses queued commands. Content shape:
 
     {"pid": <int>, "items": [<item>, ...]}
 
-Each item is either `{"kind": "gepa", "run_name", "run_dir", "script_path",
-"dry_run"}` (a `LaunchSpec`) or `{"kind": "prompt", "text": ...}` (a chat
-prompt string), mirroring the `LaunchSpec | str` shape of `pending_queue`
-itself.
+Each item is typed as a script launch, chat prompt, or prompt optimization
+spec. The loader still accepts the legacy `{"kind": "gepa", ...}` and
+`{"kind": "prompt", ...}` shapes so older queue sessions recover cleanly.
 
 Scoping the file per session (rather than one shared file) is what lets two
 `autumn` processes run at once without clobbering each other's queue. The
@@ -30,12 +29,62 @@ Same tradeoff `registry.py` already accepts for `autumn.pid`/`is_live`.
 import json
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from cli import LaunchSpec
 from procutil import pid_alive
+from prompt_optimization_contracts import PromptOptimizationSpec, prompt_optimization_spec_from_dict
 
-Item = LaunchSpec | str
+
+@dataclass(frozen=True)
+class ScriptQueueItem:
+    spec: LaunchSpec
+
+    @property
+    def run_name(self) -> str:
+        return self.spec.run_name
+
+    @property
+    def run_dir(self) -> Path:
+        return self.spec.run_dir
+
+    @property
+    def script_path(self) -> Path:
+        return self.spec.script_path
+
+    @property
+    def dry_run(self) -> bool:
+        return self.spec.dry_run
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, LaunchSpec):
+            return self.spec == other
+        if isinstance(other, ScriptQueueItem):
+            return self.spec == other.spec
+        return False
+
+
+@dataclass(frozen=True)
+class ChatQueueItem:
+    text: str
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.text == other
+        if isinstance(other, ChatQueueItem):
+            return self.text == other.text
+        return False
+
+
+@dataclass(frozen=True)
+class PromptOptimizationQueueItem:
+    spec: PromptOptimizationSpec
+
+
+TypedItem = ScriptQueueItem | ChatQueueItem | PromptOptimizationQueueItem
+LegacyItem = LaunchSpec | str
+Item = TypedItem | LegacyItem
 
 
 def new_session_id() -> str:
@@ -44,6 +93,24 @@ def new_session_id() -> str:
 
 def session_path(sessions_root: Path, session_id: str) -> Path:
     return sessions_root / f"{session_id}.json"
+
+
+def typed_item(item: Item) -> TypedItem:
+    if isinstance(item, (ScriptQueueItem, ChatQueueItem, PromptOptimizationQueueItem)):
+        return item
+    if isinstance(item, LaunchSpec):
+        return ScriptQueueItem(item)
+    if isinstance(item, str):
+        return ChatQueueItem(item)
+    raise TypeError(f"unsupported queue item: {type(item).__name__}")
+
+
+def _legacy_item(item: TypedItem) -> Item:
+    if isinstance(item, ScriptQueueItem):
+        return item.spec
+    if isinstance(item, ChatQueueItem):
+        return item.text
+    return item
 
 
 def _item_to_dict(item: Item) -> dict:
@@ -55,17 +122,30 @@ def _item_to_dict(item: Item) -> dict:
             "script_path": str(item.script_path),
             "dry_run": item.dry_run,
         }
-    return {"kind": "prompt", "text": item}
+    if isinstance(item, str):
+        return {"kind": "prompt", "text": item}
+    typed = typed_item(item)
+    if isinstance(typed, ScriptQueueItem):
+        return {
+            "kind": "script",
+            "run_name": typed.spec.run_name,
+            "run_dir": str(typed.spec.run_dir),
+            "script_path": str(typed.spec.script_path),
+            "dry_run": typed.spec.dry_run,
+        }
+    if isinstance(typed, ChatQueueItem):
+        return {"kind": "chat", "text": typed.text}
+    return {"kind": "prompt_optimization", "spec": typed.spec.to_dict()}
 
 
-def _item_from_dict(raw: object) -> Item | None:
+def _typed_item_from_dict(raw: object) -> TypedItem | None:
     """Returns `None` for any entry that isn't a well-formed item dict, so a
     partially-corrupt file degrades to dropping just that entry rather than
     the whole session."""
     if not isinstance(raw, dict):
         return None
     kind = raw.get("kind")
-    if kind == "gepa":
+    if kind in {"gepa", "script"}:
         run_name, run_dir, script_path, dry_run = (
             raw.get("run_name"),
             raw.get("run_dir"),
@@ -78,15 +158,22 @@ def _item_from_dict(raw: object) -> Item | None:
             return None
         if not isinstance(script_path, str) or not script_path:
             return None
-        return LaunchSpec(
-            run_name=run_name,
-            run_dir=Path(run_dir),
-            script_path=Path(script_path),
-            dry_run=bool(dry_run),
+        return ScriptQueueItem(
+            LaunchSpec(
+                run_name=run_name,
+                run_dir=Path(run_dir),
+                script_path=Path(script_path),
+                dry_run=bool(dry_run),
+            )
         )
-    if kind == "prompt":
+    if kind in {"prompt", "chat"}:
         text = raw.get("text")
-        return text if isinstance(text, str) and text else None
+        return ChatQueueItem(text) if isinstance(text, str) and text else None
+    if kind == "prompt_optimization":
+        try:
+            return PromptOptimizationQueueItem(prompt_optimization_spec_from_dict(raw.get("spec")))
+        except ValueError:
+            return None
     return None
 
 
@@ -118,14 +205,23 @@ def _load_session(path: Path) -> dict | None:
     return {"pid": pid, "items": items}
 
 
-def load_queue(path: Path) -> list[Item]:
+def load_typed_queue(path: Path) -> list[TypedItem]:
     """Reads back `path`'s items, tolerating a missing or corrupt file (empty
     list) and dropping any individual malformed entries."""
     session = _load_session(path)
     if session is None:
         return []
-    parsed = [_item_from_dict(raw) for raw in session["items"]]
+    parsed = [_typed_item_from_dict(raw) for raw in session["items"]]
     return [item for item in parsed if item is not None]
+
+
+def load_queue(path: Path) -> list[Item]:
+    """Compatibility wrapper for callers that still use `LaunchSpec | str`.
+
+    Script and chat entries are returned in their legacy shape; prompt
+    optimization entries have no legacy equivalent, so they stay typed.
+    """
+    return [_legacy_item(item) for item in load_typed_queue(path)]
 
 
 def discover_resumable(sessions_root: Path, own_path: Path) -> list[Path]:
@@ -159,6 +255,14 @@ def load_and_merge(paths: list[Path]) -> list[Item]:
     merged: list[Item] = []
     for path in paths:
         merged.extend(load_queue(path))
+    return merged
+
+
+def load_and_merge_typed(paths: list[Path]) -> list[TypedItem]:
+    """Typed counterpart to `load_and_merge` for the application queue."""
+    merged: list[TypedItem] = []
+    for path in paths:
+        merged.extend(load_typed_queue(path))
     return merged
 
 

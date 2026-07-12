@@ -816,8 +816,8 @@ async def test_live_run_queues_prompt_replies_in_order_without_duplicate_users(t
             ChatMessage(role="user", text="second queued prompt"),
         ]
         assert json.loads(app._queue_session_path.read_text())["items"] == [
-            {"kind": "prompt", "text": "first queued prompt"},
-            {"kind": "prompt", "text": "second queued prompt"},
+            {"kind": "chat", "text": "first queued prompt"},
+            {"kind": "chat", "text": "second queued prompt"},
         ]
         assert json.loads(app._chat_session_path.read_text())["messages"] == [
             {"role": "user", "text": "first queued prompt"},

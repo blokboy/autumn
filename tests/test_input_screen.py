@@ -1,6 +1,7 @@
 """Behavioral tests for InputScreen: the bare-`autumn` landing screen and its
-three submit paths (empty Enter -> browse, `gepa ...` -> live launch, anything
-else -> shared chat prompt), via Textual's Pilot harness against a real
+submit paths (empty Enter -> browse, `gepa run` -> live launch,
+`gepa optimize` -> prompt optimization draft, anything else -> shared chat
+prompt), via Textual's Pilot harness against a real
 AutumnApp constructed the same way cli.py's `_browse()` does (no
 run_name/run_dir).
 """
@@ -70,7 +71,7 @@ async def test_empty_enter_transitions_to_browse_dashboard(tmp_path):
         assert not any(isinstance(s, InputScreen) for s in app.screen_stack)
 
 
-async def test_gepa_command_launches_live_run(tmp_path):
+async def test_gepa_run_command_launches_live_run(tmp_path):
     script = tmp_path / "demo_script.py"
     script.write_text("pass\n")
 
@@ -78,7 +79,7 @@ async def test_gepa_command_launches_live_run(tmp_path):
     async with app.run_test() as pilot:
         await pilot.pause()
         depth_before = len(app.screen_stack)
-        await _submit(pilot, f"gepa {script} --dry-run --name my-run")
+        await _submit(pilot, f"gepa run {script} --dry-run --name my-run")
 
         assert isinstance(app.screen, DashboardScreen)
         assert app.state is not None
@@ -90,7 +91,7 @@ async def test_gepa_command_launches_live_run(tmp_path):
         await _drain_dry_run_replay()
 
 
-async def test_gepa_directory_command_launches_first_script_and_queues_rest(tmp_path):
+async def test_gepa_run_directory_command_launches_first_script_and_queues_rest(tmp_path):
     script_dir = tmp_path / "examples"
     script_dir.mkdir()
     first_script = script_dir / "a_first.py"
@@ -102,7 +103,7 @@ async def test_gepa_directory_command_launches_first_script_and_queues_rest(tmp_
     app = AutumnApp(runs_root=tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await _submit(pilot, f"gepa --run-dir {script_dir}")
+        await _submit(pilot, f"gepa run --run-dir {script_dir}")
 
         assert isinstance(app.screen, DashboardScreen)
         assert app.state is not None
@@ -118,7 +119,7 @@ async def test_gepa_command_missing_script_shows_error_and_stays(tmp_path):
     app = AutumnApp(runs_root=tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await _submit(pilot, "gepa --dry-run")
+        await _submit(pilot, "gepa run --dry-run")
 
         assert isinstance(app.screen, InputScreen)
         assert app.state is None
@@ -133,7 +134,7 @@ async def test_gepa_command_nonexistent_script_shows_error_and_stays(tmp_path):
     app = AutumnApp(runs_root=tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await _submit(pilot, f"gepa {missing}")
+        await _submit(pilot, f"gepa run {missing}")
 
         assert isinstance(app.screen, InputScreen)
         assert app.state is None
@@ -149,13 +150,45 @@ async def test_gepa_command_bad_flag_shows_error_and_stays(tmp_path):
     app = AutumnApp(runs_root=tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
-        await _submit(pilot, f"gepa {script} --bogus-flag")
+        await _submit(pilot, f"gepa run {script} --bogus-flag")
 
         assert isinstance(app.screen, InputScreen)
         assert app.state is None
         notifications = list(app._notifications)
         assert len(notifications) == 1
         assert notifications[0].severity == "error"
+
+
+async def test_bare_gepa_script_shows_mode_guidance_and_stays(tmp_path):
+    script = tmp_path / "demo_script.py"
+    script.write_text("pass\n")
+
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _submit(pilot, f"gepa {script}")
+
+        assert isinstance(app.screen, InputScreen)
+        assert app.state is None
+        notifications = list(app._notifications)
+        assert len(notifications) == 1
+        assert notifications[0].severity == "error"
+        assert "gepa run <script.py>" in str(notifications[0].message)
+
+
+async def test_gepa_optimize_is_recognized_as_prompt_optimization_draft(tmp_path):
+    app = AutumnApp(runs_root=tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _submit(pilot, "gepa optimize --prompt 'Write a summary'")
+
+        assert isinstance(app.screen, InputScreen)
+        assert app.state is None
+        assert app.chat_messages == []
+        notifications = list(app._notifications)
+        assert len(notifications) == 1
+        assert notifications[0].severity == "information"
+        assert "Prompt optimization draft recognized" in str(notifications[0].message)
 
 
 async def test_q_quits_when_input_is_empty(tmp_path):

@@ -23,7 +23,7 @@ import queue_store
 import runner
 import subagent
 from anthropic_runner import AnthropicRunner, AnthropicRuntimeError
-from cli import LaunchSpec, LaunchSpecError, parse_command_line
+from cli import LaunchSpec, LaunchSpecError, PromptOptimizationDraft, parse_command_line
 from curated_models import CuratedModel
 from dashboard_callback import DashboardCallback
 from fixtures import dry_run_events
@@ -218,7 +218,7 @@ class AutumnApp(App):
         is_model_runtime_available: model_router.RuntimeAvailability | None = None,
         prompt_routing_policy: PromptRoutingPolicy | None = None,
         model_download_fn: model_downloader.DownloadFile | None = None,
-        initial_queue: list[LaunchSpec | str] | None = None,
+        initial_queue: list[queue_store.Item] | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(_AUTUMN_THEME)
@@ -308,15 +308,17 @@ class AutumnApp(App):
             self.state = None
             self._dashboard_callback = None
 
-        # In-memory-only queue of commands submitted via CommandBar while a
-        # run was already live (see submit_command below); each entry is
-        # either a LaunchSpec (a `gepa ...` command) or a plain str (a chat
-        # prompt, queued so it is answered in the same order it was submitted).
+        # In-memory queue of commands submitted via CommandBar while a run was
+        # already live (see submit_command below). Entries are typed queue
+        # items; queue_store still accepts/returns legacy LaunchSpec | str at
+        # compatibility boundaries.
         # `_queue_watch_state` is whichever DashboardState
         # `_poll_queue_advance` is currently watching for a RUNNING -> terminal
         # transition -- always `self.state` as of the last time a live run was
         # (re)started, so the poll never fires twice for the same run.
-        self.pending_queue: list[LaunchSpec | str] = list(initial_queue or [])
+        self.pending_queue: list[queue_store.TypedItem] = [
+            queue_store.typed_item(item) for item in (initial_queue or [])
+        ]
         self._queued_prompt_refs: list[ChatMessage | None] = []
         self._queue_watch_state: DashboardState | None = self.state
         self._next_subagent_number = 1
@@ -329,7 +331,7 @@ class AutumnApp(App):
         # Browse-only construction (cli.py's `_browse`, i.e. bare `autumn`)
         # lands on InputScreen first instead of jumping straight into browse
         # mode -- InputScreen itself decides whether to fall through to browse
-        # (empty Enter) or promote into a live run (`gepa ...`, see
+        # (empty Enter) or promote into a live run (`gepa run ...`, see
         # `launch_gepa_run` below).
         if self.run_name is not None and self.run_dir is not None:
             # Kept as a direct reference (rather than looked up later via
@@ -374,7 +376,7 @@ class AutumnApp(App):
                 self.push_screen(InputScreen())
             return
 
-        merged = queue_store.load_and_merge(leftover)
+        merged = queue_store.load_and_merge_typed(leftover)
         merged_chat = chat_store.load_and_merge(leftover_chats)
         message = _resume_prompt_message(
             len(merged),
@@ -426,7 +428,7 @@ class AutumnApp(App):
         """Kicks off this process's live run on a background thread (dry-run
         replay or a real `runner.launch`) against whatever `_dashboard_callback`
         currently is. Shared by `on_mount`'s launch-mode construction and
-        `launch_gepa_run` (InputScreen's `gepa ...` path), so the two ways of
+        `launch_gepa_run` (InputScreen's `gepa run ...` path), so the two ways of
         starting a live run can't drift apart."""
         if self._dashboard_callback is None:
             return
@@ -1175,7 +1177,7 @@ class AutumnApp(App):
         return state
 
     def launch_gepa_run(self, spec: LaunchSpec) -> None:
-        """InputScreen's `gepa <script> ...` path: promotes this already-mounted,
+        """InputScreen's `gepa run <script> ...` path: promotes this already-mounted,
         browse-only AutumnApp into a live run, identically to what launch-mode
         construction + `on_mount` do together for `autumn run <script>`."""
         state = self._adopt_live_spec(spec)
@@ -1195,12 +1197,19 @@ class AutumnApp(App):
         """Launches the first parsed GEPA run and queues the rest in order."""
         if not specs:
             return
-        self.pending_queue.extend(specs[1:])
+        self.pending_queue.extend(queue_store.ScriptQueueItem(spec) for spec in specs[1:])
         if len(specs) > 1:
             self._persist_queue()
         self.launch_gepa_run(specs[0])
         if len(specs) > 1:
             self.call_after_refresh(self._refresh_queue_panel)
+
+    def start_prompt_optimization_draft(self, draft: PromptOptimizationDraft) -> None:
+        """Handoff point for first-class prompt optimization commands."""
+        self.notify(
+            "Prompt optimization draft recognized. Confirmation will be available in a later ticket.",
+            severity="information",
+        )
 
     def _launch_spec_now(self, spec: LaunchSpec) -> None:
         """Launches `spec` against the already-mounted DashboardScreen (via
@@ -1216,6 +1225,8 @@ class AutumnApp(App):
         return self.state is not None and self.state.status is RunStatus.RUNNING
 
     def _refresh_queue_panel(self) -> None:
+        if not self._dashboard_screen.is_mounted:
+            return
         self._dashboard_screen.refresh_queue(self.pending_queue)
 
     def _persist_queue(self) -> None:
@@ -1230,7 +1241,7 @@ class AutumnApp(App):
         user messages, favoring the newest matching chat messages for duplicate
         prompt text.
         """
-        prompts = [item for item in self.pending_queue if isinstance(item, str)]
+        prompts = [item.text for item in self.pending_queue if isinstance(item, queue_store.ChatQueueItem)]
         refs: list[ChatMessage | None] = []
         cursor = len(self.chat_messages) - 1
         for prompt in reversed(prompts):
@@ -1257,7 +1268,7 @@ class AutumnApp(App):
     def submit_command(self, text: str) -> None:
         """Handles one line submitted via CommandBar (`:` on DashboardScreen).
 
-        A `gepa <script> ...` command launches immediately if no run is live,
+        A `gepa run <script> ...` command launches immediately if no run is live,
         or is appended to `pending_queue` if one is. A non-`gepa` prompt is
         answered immediately when possible; while a run is live, its user
         message is displayed/persisted immediately and the answer is queued in
@@ -1291,18 +1302,22 @@ class AutumnApp(App):
             self.notify(str(exc), severity="error")
             return
 
+        if isinstance(specs, PromptOptimizationDraft):
+            self.start_prompt_optimization_draft(specs)
+            return
+
         if self._run_is_live():
             if specs is None:
                 self._queued_prompt_refs.append(self._append_user_prompt(text))
-                self.pending_queue.append(text)
+                self.pending_queue.append(queue_store.ChatQueueItem(text))
             else:
-                self.pending_queue.extend(specs)
+                self.pending_queue.extend(queue_store.ScriptQueueItem(spec) for spec in specs)
             self._persist_queue()
             self._refresh_queue_panel()
             return
 
         if specs is not None:
-            self.pending_queue.extend(specs[1:])
+            self.pending_queue.extend(queue_store.ScriptQueueItem(spec) for spec in specs[1:])
             if len(specs) > 1:
                 self._persist_queue()
             self._launch_spec_now(specs[0])
@@ -1333,16 +1348,21 @@ class AutumnApp(App):
             item = self.pending_queue.pop(0)
             self._persist_queue()
             self._refresh_queue_panel()
-            if isinstance(item, str):
-                snapshot, user_message = self._queued_prompt_context(item)
+            if isinstance(item, queue_store.ChatQueueItem):
+                snapshot, user_message = self._queued_prompt_context(item.text)
                 self._answer_prompt_async(
-                    prompt=item,
+                    prompt=item.text,
                     snapshot=snapshot,
                     insert_after=user_message,
                     on_complete=self._advance_queue,
                 )
                 return
-            self._launch_spec_now(item)
+            if isinstance(item, queue_store.ScriptQueueItem):
+                self._launch_spec_now(item.spec)
+                return
+            self.pending_queue.insert(0, item)
+            self._persist_queue()
+            self._refresh_queue_panel()
             return
         self._refresh_queue_panel()
 

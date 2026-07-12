@@ -43,10 +43,10 @@ autumn
 
 On a fresh install, Autumn offers a curated local model picker. Pick one or more models to download from Hugging Face, or skip and use hosted providers/offline fallback. Downloads continue in the background and show progress in the command bar.
 
-Press Enter on an empty landing input to browse previous runs. Type a `gepa ...` command to launch a run. Type anything else to start a chat.
+Press Enter on an empty landing input to browse previous runs. Type `gepa run ...` to launch a script run, `gepa optimize ...` to draft a prompt optimization, or anything else to start a chat.
 
 ```bash
-gepa fixtures/examples/priority_triage.py --dry-run
+gepa run fixtures/examples/priority_triage.py --dry-run
 ```
 
 Inside the dashboard, press `:` to focus the command bar.
@@ -174,9 +174,9 @@ Dashboard subagents appear as named chat participants, run alongside normal chat
 
 Autumn keeps command submission ordered:
 
-- Submit `gepa ...` while a run is live and it queues behind the active run.
+- Submit `gepa run ...` while a run is live and it queues behind the active run.
 - Submit chat while a run is live and the prompt is recorded immediately, then answered in order.
-- Submit `gepa --run-dir <directory>` and each direct child Python script is queued in sorted order.
+- Submit `gepa run --run-dir <directory>` and each direct child Python script is queued in sorted order.
 
 Pending queues and unfinished chat sessions are persisted. On relaunch, Autumn offers to resume or start fresh.
 
