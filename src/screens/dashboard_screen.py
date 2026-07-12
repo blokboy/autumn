@@ -16,8 +16,9 @@ from textual.screen import Screen
 from textual.widgets import ListView, TabbedContent, TabPane
 
 import catalog, registry, stub_providers
-from models import CatalogEntry, DashboardState, PromptRoutingPolicy, RunStatus
+from models import CatalogEntry, DashboardState, PromptRoutingPolicy, RunKind, RunStatus
 from models import ChatMessage
+from widgets.best_result_pane import BestResultPane
 from widgets.chat_view import ChatView
 from widgets.candidates_table import CandidatesTable
 from widgets.command_bar import CommandBar
@@ -26,6 +27,8 @@ from widgets.model_catalog_view import ModelCatalogView
 from widgets.overview_pane import OverviewPane
 from widgets.run_sidebar import RunListItem, RunSidebar
 from widgets.settings_view import SettingsView
+
+_BEST_RESULT_TAB_ID = "best-result-tab"
 
 # How often to poll the live DashboardState.version for changes made off-screen
 # (e.g. by DashboardCallback via app.call_from_thread). DashboardState is a plain
@@ -120,6 +123,11 @@ class DashboardScreen(Screen):
                 yield TabPane("Candidates", CandidatesTable(self._displayed_state, id="candidates"))
                 yield TabPane("Log", LogView(self._displayed_state, id="log"))
                 yield TabPane(
+                    "Best Result",
+                    BestResultPane(self._displayed_state, id="best-result"),
+                    id=_BEST_RESULT_TAB_ID,
+                )
+                yield TabPane(
                     "Chat",
                     ChatView(
                         self._chat_messages,
@@ -145,6 +153,7 @@ class DashboardScreen(Screen):
         self.set_interval(_POLL_INTERVAL_SECONDS, self._poll_live_state)
         self.set_interval(_REGISTRY_POLL_INTERVAL_SECONDS, self._rescan_registry)
         self.query_one(CommandBar).refresh_download_status(self._download_status)
+        self._sync_best_result_tab(self._displayed_state)
 
     def action_focus_command_bar(self) -> None:
         self.query_one(CommandBar).focus_input()
@@ -218,6 +227,7 @@ class DashboardScreen(Screen):
         self._selected_run_dir = run_dir
         self._displayed_state = self._state_for(run_dir)
         self._refresh_tabs(self._displayed_state)
+        self._sync_best_result_tab(self._displayed_state)
 
     @property
     def selected_run_dir(self) -> Path | None:
@@ -248,12 +258,24 @@ class DashboardScreen(Screen):
         self._selected_run_dir = state.run_dir
         self._displayed_state = state
         self._refresh_tabs(state)
+        self._sync_best_result_tab(state)
         self.run_worker(self._rescan_registry())
 
     def _refresh_tabs(self, state: DashboardState) -> None:
         self.query_one("#overview", OverviewPane).refresh_from_state(state)
         self.query_one("#candidates", CandidatesTable).refresh_from_state(state)
         self.query_one("#log", LogView).refresh_from_state(state)
+        self.query_one("#best-result", BestResultPane).refresh_from_state(state)
+
+    def _sync_best_result_tab(self, state: DashboardState) -> None:
+        """Prompt optimization runs get a dedicated "Best Result" tab; script
+        runs never see prompt-optimization-only UI (#49's acceptance
+        criteria), so the tab is hidden rather than merely left empty."""
+        tabbed_content = self.query_one(TabbedContent)
+        if state.run_kind == RunKind.PROMPT_OPTIMIZATION:
+            tabbed_content.show_tab(_BEST_RESULT_TAB_ID)
+        else:
+            tabbed_content.hide_tab(_BEST_RESULT_TAB_ID)
 
     def _poll_live_state(self) -> None:
         state = self._live_state

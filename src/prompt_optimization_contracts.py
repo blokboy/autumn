@@ -8,6 +8,17 @@ PROMPT_OPTIMIZATION_SPEC_VERSION = 1
 PROMPT_OPTIMIZATION_RUN_KIND = "prompt_optimization"
 BEST_RESULT_ARTIFACTS_VERSION = 1
 
+# Filenames `prompt_optimization_runtime.py` writes into a run directory on
+# completion, and `registry.py` reads back (for both a live run that just
+# finished and any historical run reopened later) -- defined here rather than
+# in `prompt_optimization_runtime.py` so `registry.py` can read them back
+# without importing that module's `gepa` dependency (see `registry.py`'s own
+# module docstring on staying import-light for the non-Textual `autumn runs`
+# CLI path).
+BEST_CANDIDATE_FILENAME = "autumn_best_candidate.json"
+BEST_PROMPT_FILENAME = "autumn_best_prompt.md"
+BEST_RESULT_FILENAME = "autumn_best_result.json"
+
 
 def _required_str(payload: dict[str, Any], key: str) -> str:
     value = payload.get(key)
