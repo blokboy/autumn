@@ -43,12 +43,17 @@ _POLL_INTERVAL_SECONDS = 0.1
 # check, and only needs to be fresh enough to notice runs appearing/finishing --
 # not fast enough to feel "live".
 _REGISTRY_POLL_INTERVAL_SECONDS = 2.0
+_DEFAULT_AGENT_MODEL_STATUS = "Model: ready to choose a local model or offline fallback"
 
 
 def _empty_state(runs_root: Path) -> DashboardState:
     """Placeholder shown when the runs root has nothing in it yet (fresh browse
     mode)."""
     return DashboardState(run_name="(no runs found)", run_dir=runs_root, status=RunStatus.UNKNOWN)
+
+
+def _agent_model_status(model_status: str | None) -> str:
+    return model_status or _DEFAULT_AGENT_MODEL_STATUS
 
 
 class DashboardScreen(Screen):
@@ -67,6 +72,16 @@ class DashboardScreen(Screen):
         width: 1fr;
         height: 1fr;
         padding: 1 2;
+    }
+    DashboardScreen .agent-name {
+        color: #d98e4a;
+        text-style: bold;
+        height: auto;
+    }
+    DashboardScreen .agent-model {
+        color: #a9906f;
+        text-opacity: 75%;
+        height: auto;
     }
     DashboardScreen TabbedContent {
         width: 1fr;
@@ -127,9 +142,15 @@ class DashboardScreen(Screen):
     def compose(self) -> ComposeResult:
         with Horizontal():
             with Vertical(id="left-sidebar"):
-                agents_panel = Static("", id="agents-panel")
-                agents_panel.border_title = "Agents"
-                yield agents_panel
+                with Vertical(id="agents-panel") as agents_panel:
+                    agents_panel.border_title = "Agents"
+                    yield Static("Autumn", id="autumn-agent-name", classes="agent-name", markup=False)
+                    yield Static(
+                        _agent_model_status(self._chat_model_status),
+                        id="autumn-agent-model",
+                        classes="agent-model",
+                        markup=False,
+                    )
                 yield RunSidebar(self._summaries, live_state=self._live_state, id="sidebar")
             with TabbedContent(initial=self._initial_tab or ""):
                 yield TabPane("Overview", OverviewPane(self._displayed_state, id="overview"))
@@ -226,6 +247,7 @@ class DashboardScreen(Screen):
         self._chat_messages = messages
         self._chat_model_status = model_status
         self._chat_tool_status = tool_status
+        self.query_one("#autumn-agent-model", Static).update(_agent_model_status(model_status))
         self.query_one("#chat", ChatView).refresh_from_messages(messages, model_status, tool_status)
 
     def on_list_view_highlighted(self, message: ListView.Highlighted) -> None:
