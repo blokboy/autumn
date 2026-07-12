@@ -15,6 +15,7 @@ from models import ChatMessage, RunStatus
 from screens.dashboard_screen import DashboardScreen
 from screens.help_screen import HelpScreen
 from screens.input_screen import InputScreen
+from screens.prompt_optimization_confirm_screen import PromptOptimizationConfirmScreen
 
 
 async def _drain_dry_run_replay() -> None:
@@ -182,13 +183,10 @@ async def test_gepa_optimize_is_recognized_as_prompt_optimization_draft(tmp_path
         await pilot.pause()
         await _submit(pilot, "gepa optimize --prompt 'Write a summary'")
 
-        assert isinstance(app.screen, InputScreen)
+        assert isinstance(app.screen, PromptOptimizationConfirmScreen)
+        assert app.screen.draft.prompt == "Write a summary"
         assert app.state is None
         assert app.chat_messages == []
-        notifications = list(app._notifications)
-        assert len(notifications) == 1
-        assert notifications[0].severity == "information"
-        assert "Prompt optimization draft recognized" in str(notifications[0].message)
 
 
 async def test_q_quits_when_input_is_empty(tmp_path):

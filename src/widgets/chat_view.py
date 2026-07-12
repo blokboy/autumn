@@ -63,15 +63,16 @@ class ChatView(Static):
         *args,
         **kwargs,
     ) -> None:
+        kwargs["markup"] = False
         super().__init__(_render_messages(messages), *args, **kwargs)
         self._messages = messages
         self._model_status = model_status
         self._tool_status = tool_status
 
     def compose(self) -> ComposeResult:
-        yield Static(_render_model_status(self._model_status), id="chat-model-status")
-        yield Static(_render_tool_status(self._tool_status), id="chat-tool-status")
-        yield Static(_render_messages(self._messages), id="chat-transcript")
+        yield Static(_render_model_status(self._model_status), id="chat-model-status", markup=False)
+        yield Static(_render_tool_status(self._tool_status), id="chat-tool-status", markup=False)
+        yield Static(_render_messages(self._messages), id="chat-transcript", markup=False)
 
     def refresh_from_messages(
         self,

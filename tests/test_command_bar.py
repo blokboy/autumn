@@ -21,6 +21,7 @@ from app import AutumnApp
 from models import ChatMessage, RunStatus
 from screens.dashboard_screen import DashboardScreen
 from screens.help_screen import HelpScreen
+from screens.prompt_optimization_confirm_screen import PromptOptimizationConfirmScreen
 from widgets.command_bar import CommandBar
 
 
@@ -252,8 +253,5 @@ async def test_gepa_optimize_via_bar_is_prompt_optimization_draft(tmp_path):
         assert app.pending_queue == []
         assert app.state is None
         assert app.chat_messages == []
-        notifications = list(app._notifications)
-        assert any(
-            n.severity == "information" and "Prompt optimization draft recognized" in str(n.message)
-            for n in notifications
-        )
+        assert isinstance(app.screen, PromptOptimizationConfirmScreen)
+        assert app.screen.draft.prompt == "Write a summary"

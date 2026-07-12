@@ -183,7 +183,7 @@ def test_launch_runs_prompt_optimization_spec_target_without_script_file(tmp_pat
     dashboard = _StubDashboard()
     observed = []
 
-    def runtime(*, dashboard, optimization_spec, run_dir):
+    def runtime(*, dashboard, optimization_spec, run_dir, catalog_root=None, assets_root=None):
         observed.append((dashboard, optimization_spec, run_dir))
 
     thread = launch(dashboard, target, prompt_optimization_runtime=runtime)
@@ -238,7 +238,7 @@ def test_prompt_optimization_target_drives_dashboard_lifecycle(tmp_path):
     )
     dashboard = DashboardCallback(_ImmediateApp(), state)
 
-    def runtime(*, dashboard, optimization_spec, run_dir):
+    def runtime(*, dashboard, optimization_spec, run_dir, catalog_root=None, assets_root=None):
         dashboard.on_optimization_start(
             {
                 "trainset_size": 3,
@@ -274,7 +274,7 @@ def test_prompt_optimization_target_respects_stop_file_at_completion(tmp_path):
     )
     dashboard = DashboardCallback(_ImmediateApp(), state)
 
-    def runtime(*, dashboard, optimization_spec, run_dir):
+    def runtime(*, dashboard, optimization_spec, run_dir, catalog_root=None, assets_root=None):
         (run_dir / "gepa.stop").touch()
 
     thread = launch(dashboard, target, prompt_optimization_runtime=runtime)
@@ -297,7 +297,7 @@ def test_prompt_optimization_runtime_error_fails_dashboard_state(tmp_path):
     )
     dashboard = DashboardCallback(_ImmediateApp(), state)
 
-    def runtime(*, dashboard, optimization_spec, run_dir):
+    def runtime(*, dashboard, optimization_spec, run_dir, catalog_root=None, assets_root=None):
         raise ValueError("bad prompt optimization target")
 
     thread = launch(dashboard, target, prompt_optimization_runtime=runtime)

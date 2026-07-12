@@ -8,10 +8,9 @@ directly, passing `dashboard` through `callbacks=[dashboard]` exactly the way
 `patch.py` injects it for script runs, so `DashboardCallback` never needs to
 know or care which path produced the events it's receiving.
 
-`run()` matches `runner.PromptOptimizationRuntime`'s Protocol shape
-(`__call__(*, dashboard, optimization_spec, run_dir) -> None`) and is meant to
-be passed as `runner.launch(..., prompt_optimization_runtime=run)` -- see
-`app.py`'s two `runner.launch(...)` call sites.
+`run()` matches `runner.PromptOptimizationRuntime`'s Protocol shape and is
+meant to be passed as `runner.launch(..., prompt_optimization_runtime=run)` --
+see `app.py`'s `_launch_runner_prompt_optimization`.
 """
 
 from __future__ import annotations
@@ -82,9 +81,15 @@ def run(
     dashboard: DashboardCallback,
     optimization_spec: PromptOptimizationSpec,
     run_dir: Path,
+    catalog_root: Path | None = None,
+    assets_root: Path | None = None,
 ) -> None:
-    catalog_root = paths.models_root()
-    assets_root = paths.eval_assets_root()
+    # Callers that already track an AutumnApp-scoped catalog/assets root (e.g.
+    # a test fixture, or a future --data-root override) pass it through so this
+    # runtime never silently reads/writes the real global XDG paths instead of
+    # the roots the rest of the app is actually using.
+    catalog_root = catalog_root or paths.models_root()
+    assets_root = assets_root or paths.eval_assets_root()
 
     installed_asset = _load_installed_asset(assets_root, optimization_spec)
     resolved_metric = _resolve_spec_metric(optimization_spec, installed_asset)

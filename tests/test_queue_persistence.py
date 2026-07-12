@@ -15,7 +15,7 @@ from textual.widgets import Static
 import chat_store, queue_store
 from app import AutumnApp
 from cli import LaunchSpec
-from models import ChatMessage, RunStatus
+from models import ChatMessage, RunKind, RunStatus
 from prompt_optimization_contracts import (
     BuiltInMetricRef,
     EvalAssetRef,
@@ -275,8 +275,21 @@ async def test_resume_recovers_typed_prompt_optimization_queue_item_in_order(tmp
         await pilot.pause()
         await pilot.pause(0.2)
 
-        assert app.pending_queue == [optimization]
-        assert queue_store.load_typed_queue(app._queue_session_path) == [optimization]
+        # The chat item answers first; the prompt optimization item then
+        # reaches the front of the queue and launches (#47) rather than
+        # sitting inert -- runner.launch's default unsupported-runtime stub
+        # fails it cleanly since no real runtime is wired into this
+        # AutumnApp (#48), but the queue itself must drain, not stall.
+        for _ in range(20):
+            if app.pending_queue == [] and app.state is not None:
+                break
+            await pilot.pause(0.05)
+
+        assert app.pending_queue == []
+        assert app.state is not None
+        assert app.state.run_kind == RunKind.PROMPT_OPTIMIZATION
+        assert app.state.run_name == "optimize-priority"
+        assert queue_store.load_typed_queue(app._queue_session_path) == []
         assert not queue_leftover.exists()
 
 

@@ -3,6 +3,7 @@
 import json
 import threading
 
+from textual.app import App, ComposeResult
 from textual.widgets import Static
 from textual.widgets import Input
 
@@ -18,7 +19,7 @@ from models import (
     RunStatus,
 )
 from screens.dashboard_screen import DashboardScreen
-from widgets.chat_view import _render_messages
+from widgets.chat_view import ChatView, _render_messages
 from widgets.command_bar import CommandBar
 
 
@@ -71,6 +72,38 @@ def test_chat_transcript_renders_named_participant_with_model_metadata():
     assert "You: hello" in rendered
     assert "Autumn [local/tiny]: hi" in rendered
     assert "Autumn Sub Agent 1 [local/tiny]: I checked the docs." in rendered
+
+
+async def test_chat_transcript_treats_model_output_as_plain_text():
+    class ChatHarness(App):
+        def compose(self) -> ComposeResult:
+            yield ChatView(
+                [
+                    ChatMessage(role="user", text="Can you explain Autumn?"),
+                    ChatMessage(
+                        role="assistant",
+                        text='[{"type":"function","function":{"name":"search_docs","arguments": "what is autumn"}}]',
+                        model="llama-3.3-70b-versatile",
+                    ),
+                ]
+            )
+
+    async with ChatHarness().run_test() as pilot:
+        await pilot.pause()
+        replacement = [
+            ChatMessage(role="user", text="Can you explain Autumn?"),
+            ChatMessage(
+                role="assistant",
+                text='[bad-markup: "what is autumn"}</function>\'}]',
+                model="llama-3.3-70b-versatile",
+            ),
+        ]
+
+        pilot.app.query_one(ChatView).refresh_from_messages(replacement)
+        await pilot.pause()
+
+        chat_text = pilot.app.query_one("#chat-transcript", Static).content
+        assert "[bad-markup" in str(chat_text)
 
 
 async def test_subagent_command_preserves_raw_command_and_posts_named_result(tmp_path):

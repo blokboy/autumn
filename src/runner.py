@@ -31,6 +31,8 @@ class PromptOptimizationRuntime(Protocol):
         dashboard: DashboardCallback,
         optimization_spec: PromptOptimizationSpec,
         run_dir: Path,
+        catalog_root: Path | None = None,
+        assets_root: Path | None = None,
     ) -> None: ...
 
 
@@ -42,6 +44,8 @@ def _unsupported_prompt_optimization_runtime(
     dashboard: DashboardCallback,
     optimization_spec: PromptOptimizationSpec,
     run_dir: Path,
+    catalog_root: Path | None = None,
+    assets_root: Path | None = None,
 ) -> None:
     raise RuntimeError("prompt optimization runtime is not configured")
 
@@ -70,6 +74,8 @@ def launch(
     spec: RunTarget,
     *,
     prompt_optimization_runtime: PromptOptimizationRuntime = _unsupported_prompt_optimization_runtime,
+    catalog_root: Path | None = None,
+    assets_root: Path | None = None,
 ) -> threading.Thread:
     """Starts a script or prompt optimization run on a daemon thread.
 
@@ -124,6 +130,8 @@ def launch(
                     dashboard=dashboard,
                     optimization_spec=spec.optimization_spec,
                     run_dir=spec.run_dir,
+                    catalog_root=catalog_root,
+                    assets_root=assets_root,
                 )
             except BaseException as caught:  # noqa: BLE001 - must catch SystemExit/KeyboardInterrupt too
                 exc = caught
