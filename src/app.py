@@ -40,6 +40,7 @@ from models import (
     ToolCitation,
 )
 from openai_runner import OpenAIRunner, OpenAIRuntimeError
+from prompt_optimization_runtime import run as run_prompt_optimization
 from screens.confirm_screen import ConfirmScreen
 from screens.dashboard_screen import DashboardScreen
 from screens.help_screen import HelpScreen
@@ -443,7 +444,7 @@ class AutumnApp(App):
             spec = LiveRunSpec(
                 script_path=self.script_path, run_dir=self.run_dir, run_name=self.run_name
             )
-            runner.launch(self._dashboard_callback, spec)
+            runner.launch(self._dashboard_callback, spec, prompt_optimization_runtime=run_prompt_optimization)
 
     def enter_browse_mode(self, *, initial_tab: str | None = None) -> None:
         """InputScreen's empty-Enter path: the same bare-browse DashboardScreen
@@ -1446,5 +1447,5 @@ class AutumnApp(App):
         self.state = state
         self._dashboard_callback = callback
         self._queue_watch_state = state
-        runner.launch(callback, spec)
+        runner.launch(callback, spec, prompt_optimization_runtime=run_prompt_optimization)
         screen.promote_to_live(state)
