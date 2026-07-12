@@ -38,6 +38,11 @@ def models_root() -> Path:
     return _data_root() / "models"
 
 
+def eval_assets_root() -> Path:
+    """XDG-style location for installed immutable eval asset bundles."""
+    return _data_root() / "eval-assets"
+
+
 def credentials_path() -> Path:
     """XDG-style location for provider API keys stored via `autumn keys add`."""
     return _data_root() / "credentials.json"

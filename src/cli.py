@@ -32,7 +32,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-import anthropic_policy, config, credentials, groq_policy, local_models, openai_policy, paths, registry
+import anthropic_policy, config, credentials, eval_assets, groq_policy, local_models, openai_policy, paths, registry
 from models import PromptRoutingPolicy
 
 _GEPA_COMMAND = "gepa"
@@ -257,6 +257,34 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subagent_parser.add_argument("prompt", help="Prompt for the one-shot subagent.")
 
+    evals_parser = subparsers.add_parser(
+        "evals",
+        help="Discover and manage immutable eval assets.",
+    )
+    evals_subparsers = evals_parser.add_subparsers(dest="evals_command")
+
+    evals_subparsers.add_parser(
+        "list",
+        help="List installed eval asset versions.",
+    )
+
+    evals_subparsers.add_parser(
+        "available",
+        help="List eval asset versions available from the static manifest.",
+    )
+
+    evals_install_parser = evals_subparsers.add_parser(
+        "install",
+        help="Install an immutable eval asset version.",
+    )
+    evals_install_parser.add_argument("asset", help="Eval asset selector, e.g. tiny-smoke@2026.07.12.")
+
+    evals_remove_parser = evals_subparsers.add_parser(
+        "remove",
+        help="Remove an installed eval asset version.",
+    )
+    evals_remove_parser.add_argument("asset", help="Eval asset selector, e.g. tiny-smoke@2026.07.12.")
+
     models_parser = subparsers.add_parser(
         "models",
         help="Manage Autumn's local model catalog.",
@@ -450,6 +478,65 @@ def _subagent(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_eval_assets_table(assets: list[eval_assets.InstalledEvalAsset] | tuple[eval_assets.RemoteEvalAsset, ...]) -> None:
+    print(f"{'ASSET':<24} {'VERSION':<12} {'METRICS':<22} {'SIZE':<10} {'LICENSE':<12} PROVENANCE")
+    for asset in assets:
+        metrics = ", ".join(asset.supported_metrics)
+        print(
+            f"{asset.asset_id:<24} {asset.version:<12} {metrics:<22} "
+            f"{asset.size_bytes:<10} {asset.license:<12} {asset.provenance}"
+        )
+
+
+def _evals(args: argparse.Namespace) -> int:
+    command = args.evals_command
+    assets_root = paths.eval_assets_root()
+
+    if command == "list":
+        installed = eval_assets.list_installed_assets(assets_root)
+        if not installed:
+            print("no eval assets installed")
+            return 0
+        _print_eval_assets_table(installed)
+        return 0
+
+    if command == "available":
+        try:
+            manifest = eval_assets.load_remote_manifest(eval_assets.DEFAULT_REMOTE_MANIFEST_PATH)
+        except eval_assets.EvalAssetError as exc:
+            print(str(exc))
+            return 1
+        if not manifest.assets:
+            print("no eval assets available")
+            return 0
+        _print_eval_assets_table(manifest.assets)
+        return 0
+
+    if command == "install":
+        try:
+            manifest = eval_assets.load_remote_manifest(eval_assets.DEFAULT_REMOTE_MANIFEST_PATH)
+            asset = eval_assets.select_remote_asset(manifest, args.asset)
+            installed = eval_assets.install_asset(assets_root, asset)
+        except eval_assets.EvalAssetError as exc:
+            print(str(exc))
+            return 1
+        print(f"installed {installed.asset_id}@{installed.version}: {installed.path}")
+        return 0
+
+    if command == "remove":
+        try:
+            asset = eval_assets.select_installed_asset(assets_root, args.asset)
+        except eval_assets.EvalAssetError as exc:
+            print(str(exc))
+            return 1
+        eval_assets.remove_asset(assets_root, asset.asset_id, asset.version)
+        print(f"removed {asset.asset_id}@{asset.version}")
+        return 0
+
+    print("evals command required")
+    return 1
+
+
 def _models_as_rows(models: list[local_models.LocalModel]) -> list[dict]:
     return [
         {
@@ -580,6 +667,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "subagent":
         return _subagent(args)
+
+    if args.command == "evals":
+        return _evals(args)
 
     if args.command == "models":
         return _models(args)
