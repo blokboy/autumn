@@ -5,12 +5,15 @@ from textual.widgets import Static
 
 from models import ChatMessage, ToolCitation
 
+_TOOL_STATUS_INTERVAL_SECONDS = 0.4
+_TOOL_STATUS_SUFFIXES = (".", "..", "...")
+
 
 def _render_model_status(model_status: str | None) -> str:
     return model_status or "Model: ready to choose a local model or offline fallback"
 
 
-def _render_tool_status(tool_status: str | None) -> str:
+def _render_tool_status(tool_status: str | None, frame: int = 0) -> str:
     """Transient "Searching docs for '...'"-style status shown while a Groq
     tool-call round is in flight (see docs/prd/chat-search-tools.md,
     "Tool-call round"). Purely UI-layer state -- `tool_status` is never part
@@ -18,7 +21,9 @@ def _render_tool_status(tool_status: str | None) -> str:
     message list from app.py each refresh and cleared back to `None` once
     the final answer starts streaming in. Renders as an empty line rather
     than disappearing entirely so the transcript below it doesn't jump."""
-    return tool_status or ""
+    if not tool_status:
+        return ""
+    return f"{tool_status}{_TOOL_STATUS_SUFFIXES[frame % len(_TOOL_STATUS_SUFFIXES)]}"
 
 
 def _render_citation(citation: ToolCitation | None) -> str:
@@ -68,11 +73,19 @@ class ChatView(Static):
         self._messages = messages
         self._model_status = model_status
         self._tool_status = tool_status
+        self._tool_status_frame = 0
 
     def compose(self) -> ComposeResult:
         yield Static(_render_model_status(self._model_status), id="chat-model-status", markup=False)
-        yield Static(_render_tool_status(self._tool_status), id="chat-tool-status", markup=False)
+        yield Static(
+            _render_tool_status(self._tool_status, self._tool_status_frame),
+            id="chat-tool-status",
+            markup=False,
+        )
         yield Static(_render_messages(self._messages), id="chat-transcript", markup=False)
+
+    def on_mount(self) -> None:
+        self.set_interval(_TOOL_STATUS_INTERVAL_SECONDS, self._advance_tool_status)
 
     def refresh_from_messages(
         self,
@@ -82,7 +95,20 @@ class ChatView(Static):
     ) -> None:
         self._messages = messages
         self._model_status = model_status
+        if tool_status != self._tool_status:
+            self._tool_status_frame = 0
         self._tool_status = tool_status
         self.query_one("#chat-model-status", Static).update(_render_model_status(model_status))
-        self.query_one("#chat-tool-status", Static).update(_render_tool_status(tool_status))
+        self._update_tool_status()
         self.query_one("#chat-transcript", Static).update(_render_messages(messages))
+
+    def _advance_tool_status(self) -> None:
+        if self._tool_status is None:
+            return
+        self._tool_status_frame = (self._tool_status_frame + 1) % len(_TOOL_STATUS_SUFFIXES)
+        self._update_tool_status()
+
+    def _update_tool_status(self) -> None:
+        self.query_one("#chat-tool-status", Static).update(
+            _render_tool_status(self._tool_status, self._tool_status_frame)
+        )

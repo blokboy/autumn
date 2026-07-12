@@ -895,7 +895,8 @@ async def test_dashboard_chat_shows_search_status_while_tool_runs_and_clears_onc
             status_text = str(app.screen.query_one("#chat-tool-status", Static).content)
             if status_text:
                 break
-        assert status_text == "Searching docs for 'what does --dry-run do'"
+        assert status_text.startswith("Searching docs for 'what does --dry-run do'")
+        assert status_text.endswith((".", "..", "..."))
         # Nothing has streamed into the transcript yet.
         chat_text = str(app.screen.query_one("#chat-transcript", Static).content)
         assert "--dry-run` skips" not in chat_text
