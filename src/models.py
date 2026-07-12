@@ -18,6 +18,13 @@ class RunStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
+class RunKind(str, Enum):
+    """Type of work represented by a run directory."""
+
+    SCRIPT = "script"
+    PROMPT_OPTIMIZATION = "prompt_optimization"
+
+
 @dataclass
 class CandidateRow:
     """A single candidate's row in the candidates table."""
@@ -170,6 +177,7 @@ class DashboardState:
 
     run_name: str
     run_dir: Path
+    run_kind: RunKind = RunKind.SCRIPT
     status: RunStatus = RunStatus.RUNNING
     trainset_size: int | None = None
     valset_size: int | None = None
@@ -204,6 +212,7 @@ class RunSummary:
     num_candidates: int | None
     last_modified: datetime
     is_live: bool = False
+    run_kind: RunKind = RunKind.SCRIPT
 
 
 @dataclass

@@ -125,3 +125,18 @@ def test_launch_clears_a_stale_gepa_stop_file_before_starting(tmp_path):
     assert not thread.is_alive()
     assert not (run_dir / "gepa.stop").exists()
     assert dashboard.finished_with == [None]
+
+
+def test_launch_writes_script_run_kind_to_meta(tmp_path):
+    run_dir = tmp_path / "run1"
+    script = tmp_path / "script.py"
+    script.write_text("")
+
+    dashboard = _StubDashboard()
+    spec = LiveRunSpec(script_path=script, run_dir=run_dir, run_name="run1")
+
+    thread = launch(dashboard, spec)
+    thread.join(timeout=5)
+
+    meta = json.loads((run_dir / "autumn_meta.json").read_text())
+    assert meta["run_kind"] == "script"

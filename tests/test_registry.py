@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from models import DashboardState, RunStatus, RunSummary
+from models import DashboardState, RunKind, RunStatus, RunSummary
 from registry import infer_status, load_dashboard_state, merge_live, scan
 
 
@@ -30,6 +30,10 @@ def _write_candidates(run_dir: Path, entries: list[dict]) -> None:
 
 def _write_status_marker(run_dir: Path, status: str) -> None:
     (run_dir / "autumn_status.json").write_text(json.dumps({"status": status}))
+
+
+def _write_meta(run_dir: Path, meta: dict) -> None:
+    (run_dir / "autumn_meta.json").write_text(json.dumps(meta))
 
 
 def _write_candidates_snapshot(
@@ -309,6 +313,7 @@ def test_scan_returns_summaries_sorted_newest_first_with_correct_fields(tmp_path
 
     by_name = {r.name: r for r in results}
     assert by_name["run_a"].status == RunStatus.COMPLETED
+    assert by_name["run_a"].run_kind == RunKind.SCRIPT
     assert by_name["run_a"].num_candidates == 2
     assert by_name["run_b"].status == RunStatus.RUNNING
     assert by_name["run_b"].num_candidates == 1
@@ -316,6 +321,18 @@ def test_scan_returns_summaries_sorted_newest_first_with_correct_fields(tmp_path
     assert by_name["run_c"].num_candidates == 0
 
     assert "not_a_run" not in by_name
+
+
+def test_scan_reads_prompt_optimization_run_kind_from_meta(tmp_path):
+    run_dir = tmp_path / "run1"
+    run_dir.mkdir()
+    _write_candidates(run_dir, [])
+    _write_run_log(run_dir, [{"event": "on_optimization_end"}])
+    _write_meta(run_dir, {"run_kind": "prompt_optimization", "run_name": "run1"})
+
+    results = scan(tmp_path)
+
+    assert results[0].run_kind == RunKind.PROMPT_OPTIMIZATION
 
 
 def test_scan_skips_non_run_subdirectories(tmp_path):
@@ -421,6 +438,7 @@ def test_load_dashboard_state_real_gepa_files_get_scores_from_snapshot(tmp_path)
 
     state = load_dashboard_state(run_dir)
 
+    assert state.run_kind == RunKind.SCRIPT
     assert state.status == RunStatus.COMPLETED
     assert state.best_idx == 1
     assert state.best_score == 1.0
@@ -432,6 +450,18 @@ def test_load_dashboard_state_real_gepa_files_get_scores_from_snapshot(tmp_path)
     # text still comes from GEPA's own candidates.json, not the snapshot.
     assert state.candidates[1].text == {"system_prompt": "Convert to uppercase."}
     assert state.candidates[0].is_pareto_member is False
+
+
+def test_load_dashboard_state_reads_prompt_optimization_run_kind_from_meta(tmp_path):
+    run_dir = tmp_path / "run1"
+    run_dir.mkdir()
+    _write_candidates(run_dir, [])
+    _write_run_log(run_dir, [{"event": "on_optimization_end"}])
+    _write_meta(run_dir, {"run_kind": "prompt_optimization", "run_name": "run1"})
+
+    state = load_dashboard_state(run_dir)
+
+    assert state.run_kind == RunKind.PROMPT_OPTIMIZATION
 
 
 def test_load_dashboard_state_falls_back_to_inline_score_keys_without_snapshot(tmp_path):

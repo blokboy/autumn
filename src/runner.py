@@ -19,7 +19,7 @@ from pathlib import Path
 
 import patch
 from dashboard_callback import DashboardCallback
-from models import LiveRunSpec
+from models import LiveRunSpec, RunKind
 
 
 def launch(dashboard: DashboardCallback, spec: LiveRunSpec) -> threading.Thread:
@@ -44,6 +44,7 @@ def launch(dashboard: DashboardCallback, spec: LiveRunSpec) -> threading.Thread:
         stop_file.unlink()
     (spec.run_dir / "autumn.pid").write_text(str(os.getpid()))
     meta = {
+        "run_kind": RunKind.SCRIPT.value,
         "script_path": str(spec.script_path),
         "run_name": spec.run_name,
         "launched_at": datetime.now().isoformat(),

@@ -44,7 +44,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from models import CandidateRow, DashboardState, RunStatus, RunSummary
+from models import CandidateRow, DashboardState, RunKind, RunStatus, RunSummary
 from procutil import pid_alive
 
 _SCORE_KEYS = ("val_score", "valset_score", "average_score", "best_score", "score")
@@ -112,6 +112,14 @@ def _extract_best_score(candidates: Any, run_log: Any) -> float | None:
 
 
 _MARKER_STATUS_VALUES = {status.value: status for status in RunStatus}
+_RUN_KIND_VALUES = {kind.value: kind for kind in RunKind}
+
+
+def _read_run_kind(run_dir: Path) -> RunKind:
+    meta = _read_json(run_dir / "autumn_meta.json")
+    if not isinstance(meta, dict):
+        return RunKind.SCRIPT
+    return _RUN_KIND_VALUES.get(meta.get("run_kind"), RunKind.SCRIPT)
 
 
 def _read_status_marker(run_dir: Path) -> RunStatus | None:
@@ -195,6 +203,7 @@ def scan(runs_root: Path) -> list[RunSummary]:
             RunSummary(
                 name=run_dir.name,
                 run_dir=run_dir,
+                run_kind=_read_run_kind(run_dir),
                 status=infer_status(run_dir),
                 best_score=best_score,
                 num_candidates=num_candidates,
@@ -226,6 +235,7 @@ def merge_live(
     live_summary = RunSummary(
         name=live_state.run_name,
         run_dir=live_state.run_dir,
+        run_kind=live_state.run_kind,
         status=live_state.status,
         best_score=live_state.best_score,
         num_candidates=len(live_state.candidates),
@@ -251,7 +261,7 @@ def load_dashboard_state(run_dir: Path) -> DashboardState:
         else {}
     )
 
-    state = DashboardState(run_name=run_dir.name, run_dir=run_dir)
+    state = DashboardState(run_name=run_dir.name, run_dir=run_dir, run_kind=_read_run_kind(run_dir))
     state.status = infer_status(run_dir)
 
     if isinstance(candidates, list):
