@@ -237,6 +237,22 @@ def parse_command_line(
     raise LaunchSpecError(_GEPA_MODE_GUIDANCE)
 
 
+def is_explicit_gepa_command(text: str) -> bool:
+    """True when `text` starts with the literal `gepa` command word.
+
+    `parse_command_line` returns the same `PromptOptimizationDraft` type for
+    both explicit `gepa optimize ...` and implicit GEPA-specific chat phrases
+    (e.g. "run GEPA on ..."), so callers that need to treat the two
+    differently -- #50's chat intake skips straight to the confirmation
+    screen only for the explicit form -- use this to tell them apart.
+    """
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        return False
+    return bool(tokens) and tokens[0] == _GEPA_COMMAND
+
+
 _IMPLICIT_GEPA_LEAD_VERBS = {"run", "use", "try", "launch"}
 _IMPLICIT_GEPA_CONNECTORS = {"on", "to", "for", "with", "against", "over"}
 

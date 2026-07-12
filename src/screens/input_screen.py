@@ -24,7 +24,7 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Input, Label
 
-from cli import LaunchSpecError, PromptOptimizationDraft, parse_command_line
+from cli import LaunchSpecError, PromptOptimizationDraft, is_explicit_gepa_command, parse_command_line
 from widgets.deer_sprite import DeerSprite
 
 # Keys that should act as the app-level shortcuts advertised in the landing
@@ -150,7 +150,10 @@ class InputScreen(Screen):
             self.app.open_chat_prompt(text)
             return
         if isinstance(specs, PromptOptimizationDraft):
-            self.app.start_prompt_optimization_draft(specs)
+            if is_explicit_gepa_command(text):
+                self.app.start_prompt_optimization_draft(specs)
+            else:
+                self.app.start_prompt_optimization_intake(specs, text)
             return
 
         self.app.launch_gepa_runs(specs)

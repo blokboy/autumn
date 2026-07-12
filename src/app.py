@@ -19,11 +19,12 @@ import model_downloader
 import model_router
 import palette
 import paths
+import prompt_optimization_intake
 import queue_store
 import runner
 import subagent
 from anthropic_runner import AnthropicRunner, AnthropicRuntimeError
-from cli import LaunchSpec, LaunchSpecError, PromptOptimizationDraft, parse_command_line
+from cli import LaunchSpec, LaunchSpecError, PromptOptimizationDraft, is_explicit_gepa_command, parse_command_line
 from curated_models import CuratedModel
 from dashboard_callback import DashboardCallback
 from fixtures import dry_run_events
@@ -268,6 +269,10 @@ class AutumnApp(App):
         # Defaults to the real GEPA-driving implementation (#48); tests substitute
         # a fake via the constructor param instead of exercising real GEPA/model calls.
         self._prompt_optimization_runtime = prompt_optimization_runtime or run_prompt_optimization
+        # Non-None only while a GEPA-specific implicit chat phrase (#50) is
+        # gathering fields via follow-up questions -- explicit `gepa optimize`
+        # never touches this, it goes straight to the confirmation screen.
+        self._prompt_optimization_intake: prompt_optimization_intake.IntakeState | None = None
         self._local_model_runner = local_model_runner or LocalModelRunner()
         # Unlike `_local_model_runner`, not eagerly defaulted here:
         # `GroqRunner()`'s real client construction raises if `GROQ_API_KEY`
@@ -627,6 +632,16 @@ class AutumnApp(App):
         self._persist_chat()
         if hasattr(self, "_dashboard_screen"):
             self._dashboard_screen.refresh_chat(self.chat_messages, self._chat_model_status)
+        return message
+
+    def _append_assistant_message(self, text: str) -> ChatMessage:
+        """A plain, non-streamed assistant chat line -- used by prompt
+        optimization intake's (#50) follow-up questions/cancellation
+        acknowledgements, which aren't model-generated replies."""
+        message = ChatMessage(role="assistant", text=text)
+        self.chat_messages.append(message)
+        self._persist_chat()
+        self._refresh_chat_display()
         return message
 
     def _insert_assistant_message(
@@ -1240,6 +1255,69 @@ class AutumnApp(App):
             )
         )
 
+    def start_prompt_optimization_intake(self, draft: PromptOptimizationDraft, raw_text: str) -> None:
+        """Handoff point for a GEPA-specific *implicit* chat phrase (#50),
+        e.g. "run GEPA on this prompt" -- unlike explicit `gepa optimize`
+        (`start_prompt_optimization_draft`, above), which jumps straight to
+        the confirmation screen even when incomplete, an implicit trigger
+        starts a short chat-style back-and-forth (see
+        `_handle_prompt_optimization_intake_answer`) to fill in whatever the
+        one-line trigger didn't already supply, before handing off to that
+        same confirmation screen. Shared by InputScreen's pre-dashboard
+        `on_input_submitted` and `submit_command`'s CommandBar path (a
+        DashboardScreen is already mounted there)."""
+        self._append_user_prompt(raw_text)
+        if not hasattr(self, "_dashboard_screen"):
+            self._dashboard_screen = DashboardScreen(
+                self.runs_root,
+                chat_messages=self.chat_messages,
+                chat_model_status=self._chat_model_status,
+                model_catalog_root=self._model_catalog_root,
+                prompt_routing_policy=self._prompt_routing_policy,
+                initial_tab="chat-tab",
+                download_status=self._download_status,
+            )
+            self.switch_screen(self._dashboard_screen)
+
+        state = prompt_optimization_intake.start_intake(draft, assets_root=self._eval_assets_root)
+        if state.asking_field is None:
+            self.start_prompt_optimization_draft(state.draft)
+            return
+        self._prompt_optimization_intake = state
+        self._append_assistant_message(prompt_optimization_intake.question_for(state.asking_field))
+
+    def _handle_prompt_optimization_intake_answer(self, text: str) -> None:
+        """`submit_command`'s handler for every chat line submitted while
+        `self._prompt_optimization_intake` is active -- every such line is
+        treated as an intake answer or cancellation, never as a fresh command/
+        chat prompt, until intake ends (completed or cancelled)."""
+        state = self._prompt_optimization_intake
+        assert state is not None
+        self._append_user_prompt(text)
+
+        if prompt_optimization_intake.is_cancel_phrase(text):
+            self._prompt_optimization_intake = None
+            self._append_assistant_message("Prompt optimization intake cancelled.")
+            return
+
+        new_state = prompt_optimization_intake.answer_intake(
+            state,
+            text,
+            catalog_root=self._model_catalog_root,
+            assets_root=self._eval_assets_root,
+            prompt_routing_policy=self._prompt_routing_policy,
+        )
+        if new_state.asking_field is None:
+            self._prompt_optimization_intake = None
+            self.start_prompt_optimization_draft(new_state.draft)
+            return
+
+        self._prompt_optimization_intake = new_state
+        question = prompt_optimization_intake.question_for(new_state.asking_field)
+        if new_state.last_errors:
+            question = "; ".join(new_state.last_errors) + f". {question}"
+        self._append_assistant_message(question)
+
     def is_run_live(self) -> bool:
         """Public counterpart to `_run_is_live`, for callers outside this
         class (e.g. PromptOptimizationConfirmScreen deciding whether Launch
@@ -1374,6 +1452,10 @@ class AutumnApp(App):
         if not text:
             return
 
+        if self._prompt_optimization_intake is not None:
+            self._handle_prompt_optimization_intake_answer(text)
+            return
+
         subagent_cancel_name = self._parse_subagent_cancel_command(text)
         if subagent_cancel_name is not None:
             if not subagent_cancel_name:
@@ -1401,7 +1483,10 @@ class AutumnApp(App):
             return
 
         if isinstance(specs, PromptOptimizationDraft):
-            self.start_prompt_optimization_draft(specs)
+            if is_explicit_gepa_command(text):
+                self.start_prompt_optimization_draft(specs)
+            else:
+                self.start_prompt_optimization_intake(specs, text)
             return
 
         if self._run_is_live():
