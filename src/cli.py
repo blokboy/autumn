@@ -34,6 +34,7 @@ from pathlib import Path
 
 import anthropic_policy, config, credentials, eval_assets, groq_policy, local_models, openai_policy, paths, registry
 from models import PromptRoutingPolicy
+from prompt_optimization_drafts import PromptOptimizationDraft, parse_prompt_optimization_draft
 
 _GEPA_COMMAND = "gepa"
 _GEPA_MODE_GUIDANCE = "Use `gepa run <script.py>` to launch a script run, or `gepa optimize ...` to start prompt optimization."
@@ -103,19 +104,6 @@ class LaunchSpec:
     run_dir: Path
     script_path: Path
     dry_run: bool
-
-
-@dataclass(frozen=True)
-class PromptOptimizationDraft:
-    """Parsed handoff for first-class prompt optimization commands.
-
-    Later confirmation/runtime work owns validating these tokens into the
-    durable prompt optimization spec. For now this separates `gepa optimize`
-    from both chat prompts and script launches.
-    """
-
-    raw_text: str
-    tokens: tuple[str, ...]
 
 
 def build_launch_spec(args: argparse.Namespace) -> LaunchSpec:
@@ -191,7 +179,12 @@ def parse_gepa_command(tokens: list[str]) -> list[LaunchSpec]:
     return specs
 
 
-def parse_command_line(text: str) -> list[LaunchSpec] | PromptOptimizationDraft | None:
+def parse_command_line(
+    text: str,
+    *,
+    catalog_root: Path | None = None,
+    prompt_routing_policy: PromptRoutingPolicy | None = None,
+) -> list[LaunchSpec] | PromptOptimizationDraft | None:
     """Parses one submitted line of free text from either InputScreen or
     CommandBar into one or more `LaunchSpec`s, or `None` if it isn't a
     `gepa` command at all (a chat prompt) -- the shared classification both
@@ -213,8 +206,18 @@ def parse_command_line(text: str) -> list[LaunchSpec] | PromptOptimizationDraft 
             raise LaunchSpecError(f"Couldn't parse command: {exc}") from exc
         return None
 
-    if not command_tokens or command_tokens[0] != _GEPA_COMMAND:
+    if not command_tokens:
         return None
+    if command_tokens[0] != _GEPA_COMMAND:
+        implicit_tokens = _implicit_prompt_optimization_tokens(command_tokens)
+        if implicit_tokens is None:
+            return None
+        return parse_prompt_optimization_draft(
+            implicit_tokens,
+            raw_text=text,
+            catalog_root=catalog_root or paths.models_root(),
+            prompt_routing_policy=prompt_routing_policy or _build_prompt_routing_policy(),
+        )
     if len(command_tokens) == 1:
         raise LaunchSpecError(_GEPA_MODE_GUIDANCE)
 
@@ -225,8 +228,45 @@ def parse_command_line(text: str) -> list[LaunchSpec] | PromptOptimizationDraft 
     if mode == "optimize":
         if not mode_tokens:
             raise LaunchSpecError("Prompt optimization details are required after `gepa optimize`.")
-        return PromptOptimizationDraft(raw_text=text, tokens=tuple(mode_tokens))
+        return parse_prompt_optimization_draft(
+            mode_tokens,
+            raw_text=text,
+            catalog_root=catalog_root or paths.models_root(),
+            prompt_routing_policy=prompt_routing_policy or _build_prompt_routing_policy(),
+        )
     raise LaunchSpecError(_GEPA_MODE_GUIDANCE)
+
+
+_IMPLICIT_GEPA_LEAD_VERBS = {"run", "use", "try", "launch"}
+_IMPLICIT_GEPA_CONNECTORS = {"on", "to", "for", "with", "against", "over"}
+
+
+def _implicit_prompt_optimization_tokens(tokens: list[str]) -> list[str] | None:
+    """Detects a narrow set of GEPA-specific implicit phrases, e.g. `run GEPA
+    on ...` or `use GEPA to optimize ...`, per the spec in issue #39. Mentioning
+    "gepa" is necessary but not sufficient -- generic "optimize"/"improve"/
+    "make better" phrasing that never names GEPA must stay normal chat, so this
+    only fires when GEPA is paired with an adjacent action verb or connector
+    rather than merely appearing somewhere in the sentence.
+    """
+    lowered = [token.lower() for token in tokens]
+    if _GEPA_COMMAND not in lowered:
+        return None
+    gepa_index = lowered.index(_GEPA_COMMAND)
+
+    if "optimize" in lowered:
+        optimize_index = lowered.index("optimize")
+        if gepa_index <= optimize_index:
+            tail = tokens[optimize_index + 1 :]
+            return tail or None
+
+    lead_ok = gepa_index == 0 or lowered[gepa_index - 1] in _IMPLICIT_GEPA_LEAD_VERBS
+    following = lowered[gepa_index + 1 :]
+    if lead_ok and following and following[0] in _IMPLICIT_GEPA_CONNECTORS:
+        tail = tokens[gepa_index + 2 :]
+        return tail or None
+
+    return None
 
 
 def _build_parser() -> argparse.ArgumentParser:

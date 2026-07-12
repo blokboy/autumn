@@ -474,6 +474,10 @@ class AutumnApp(App):
         return self._model_catalog_root
 
     @property
+    def prompt_routing_policy(self) -> PromptRoutingPolicy:
+        return self._prompt_routing_policy
+
+    @property
     def model_download_fn(self) -> model_downloader.DownloadFile | None:
         return self._model_download_fn
 
@@ -1297,7 +1301,11 @@ class AutumnApp(App):
             return
 
         try:
-            specs = parse_command_line(text)
+            specs = parse_command_line(
+                text,
+                catalog_root=self._model_catalog_root,
+                prompt_routing_policy=self._prompt_routing_policy,
+            )
         except LaunchSpecError as exc:
             self.notify(str(exc), severity="error")
             return

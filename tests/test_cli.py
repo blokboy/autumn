@@ -45,7 +45,8 @@ def test_parse_command_line_gepa_optimize_returns_prompt_draft():
 
     assert draft == PromptOptimizationDraft(
         raw_text="gepa optimize --prompt 'Write a better summary' --name summary",
-        tokens=("--prompt", "Write a better summary", "--name", "summary"),
+        prompt="Write a better summary",
+        run_name="summary",
     )
 
 

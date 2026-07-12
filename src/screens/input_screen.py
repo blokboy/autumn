@@ -137,7 +137,11 @@ class InputScreen(Screen):
             return
 
         try:
-            specs = parse_command_line(text)
+            specs = parse_command_line(
+                text,
+                catalog_root=self.app.model_catalog_root,
+                prompt_routing_policy=self.app.prompt_routing_policy,
+            )
         except LaunchSpecError as exc:
             self.notify(str(exc), severity="error")
             return
