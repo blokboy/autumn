@@ -1,8 +1,10 @@
 """Runtime boundary for calling Groq's hosted chat completions API."""
 
 import json
+import re
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Protocol
 
 import groq
@@ -53,6 +55,10 @@ _ALWAYS_OFFERED_TOOLS: list[dict[str, Any]] = [
 _TOOLS = _ALWAYS_OFFERED_TOOLS
 
 _SEARCH_WEB_PREFIX = "/search "
+_RECOVERED_TOOL_CALL_ID = "recovered_tool_call_1"
+_FAILED_TOOL_GENERATION_RE = re.compile(
+    r"<function=(?P<name>[A-Za-z_][A-Za-z0-9_.-]*)(?:>)?(?P<arguments>\{.*\})</function>"
+)
 
 _MUTATING_TOOLS_BY_NAME: dict[str, system_tools.MutatingTool] = {
     tool.name: tool for tool in system_tools.MUTATING_TOOLS
@@ -174,6 +180,44 @@ def _includes_search_web_tool(tools: list[dict[str, Any]]) -> bool:
 def _wrap_groq_error(model_name: str, exc: groq.GroqError) -> GroqRuntimeError:
     detail = getattr(exc, "message", None) or str(exc)
     return GroqRuntimeError(f"{model_name} failed: {detail}")
+
+
+def _failed_tool_generation(exc: groq.GroqError) -> str | None:
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if not isinstance(error, dict) or error.get("code") != "tool_use_failed":
+        return None
+    failed_generation = error.get("failed_generation")
+    if not isinstance(failed_generation, str):
+        return None
+    return failed_generation
+
+
+def _recover_tool_call_from_failed_generation(failed_generation: str) -> Any | None:
+    """Groq may reject a malformed tool call but include the intended call in
+    `failed_generation`, e.g. `<function=search_docs{"query":"Autumn"}</function>`.
+    If the function name and JSON object are clear, treat it like a normal
+    decided tool call so the turn can continue instead of interrupting."""
+    match = _FAILED_TOOL_GENERATION_RE.search(failed_generation.strip())
+    if match is None:
+        return None
+
+    name = match.group("name")
+    raw_arguments = match.group("arguments")
+    try:
+        arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(arguments, dict):
+        return None
+
+    return SimpleNamespace(
+        id=_RECOVERED_TOOL_CALL_ID,
+        type="function",
+        function=SimpleNamespace(name=name, arguments=raw_arguments),
+    )
 
 
 class GroqRunner:
@@ -312,6 +356,24 @@ class GroqRunner:
         try:
             decision = self._client.chat.completions.create(model=model_name, messages=payload, tools=tools)
         except groq.GroqError as exc:
+            failed_generation = _failed_tool_generation(exc)
+            recovered_tool_call = (
+                _recover_tool_call_from_failed_generation(failed_generation)
+                if failed_generation is not None
+                else None
+            )
+            if recovered_tool_call is not None:
+                self._run_tool_call_round(
+                    recovered_tool_call,
+                    SimpleNamespace(content=None),
+                    payload,
+                    model_name,
+                    on_chunk=on_chunk,
+                    cancel_event=cancel_event,
+                    on_status=on_status,
+                    on_citation=on_citation,
+                )
+                return
             raise _wrap_groq_error(model_name, exc) from exc
 
         decision_message = decision.choices[0].message
@@ -324,6 +386,29 @@ class GroqRunner:
             return
 
         tool_call = tool_calls[0]
+        self._run_tool_call_round(
+            tool_call,
+            decision_message,
+            payload,
+            model_name,
+            on_chunk=on_chunk,
+            cancel_event=cancel_event,
+            on_status=on_status,
+            on_citation=on_citation,
+        )
+
+    def _run_tool_call_round(
+        self,
+        tool_call: Any,
+        decision_message: Any,
+        payload: list[dict[str, Any]],
+        model_name: str,
+        *,
+        on_chunk: Callable[[str], None],
+        cancel_event: threading.Event | None,
+        on_status: Callable[[str], None] | None,
+        on_citation: Callable[[ToolCitation], None] | None,
+    ) -> None:
         if on_status is not None:
             status_text = _status_text_for_tool_call(tool_call)
             if status_text is not None:
