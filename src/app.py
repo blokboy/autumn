@@ -35,16 +35,21 @@ from models import (
     LiveRunSpec,
     LocalModel,
     ModelChoice,
+    PromptOptimizationRunSpec,
     PromptRoutingPolicy,
+    RunKind,
     RunStatus,
     ToolCitation,
 )
 from openai_runner import OpenAIRunner, OpenAIRuntimeError
+from prompt_optimization_contracts import PromptOptimizationSpec
+from runner import PromptOptimizationRuntime
 from screens.confirm_screen import ConfirmScreen
 from screens.dashboard_screen import DashboardScreen
 from screens.help_screen import HelpScreen
 from screens.input_screen import InputScreen
 from screens.model_picker_screen import ModelPickerScreen
+from screens.prompt_optimization_confirm_screen import PromptOptimizationConfirmScreen
 
 # Retints Textual's own built-in widget chrome (Input focus border, Button,
 # scrollbars, DataTable cursor, etc.) to match styles/autumn.tcss's fall
@@ -219,6 +224,8 @@ class AutumnApp(App):
         prompt_routing_policy: PromptRoutingPolicy | None = None,
         model_download_fn: model_downloader.DownloadFile | None = None,
         initial_queue: list[queue_store.Item] | None = None,
+        eval_assets_root: Path | None = None,
+        prompt_optimization_runtime: PromptOptimizationRuntime | None = None,
     ) -> None:
         super().__init__()
         self.register_theme(_AUTUMN_THEME)
@@ -256,6 +263,12 @@ class AutumnApp(App):
         # chunk arrives (or, defensively, at the end of any turn).
         self._chat_tool_status: str | None = None
         self._model_catalog_root = model_catalog_root or paths.models_root()
+        self._eval_assets_root = eval_assets_root or paths.eval_assets_root()
+        # None means "no prompt optimization runtime configured yet" -- runner.launch
+        # falls back to its own _unsupported_prompt_optimization_runtime, which fails
+        # the run cleanly with a clear error instead of raising out of this
+        # constructor. Real wiring lands with the runtime-execution ticket (#48).
+        self._prompt_optimization_runtime = prompt_optimization_runtime
         self._local_model_runner = local_model_runner or LocalModelRunner()
         # Unlike `_local_model_runner`, not eagerly defaulted here:
         # `GroqRunner()`'s real client construction raises if `GROQ_API_KEY`
@@ -472,6 +485,10 @@ class AutumnApp(App):
     @property
     def model_catalog_root(self) -> Path:
         return self._model_catalog_root
+
+    @property
+    def eval_assets_root(self) -> Path:
+        return self._eval_assets_root
 
     @property
     def prompt_routing_policy(self) -> PromptRoutingPolicy:
@@ -1209,11 +1226,82 @@ class AutumnApp(App):
             self.call_after_refresh(self._refresh_queue_panel)
 
     def start_prompt_optimization_draft(self, draft: PromptOptimizationDraft) -> None:
-        """Handoff point for first-class prompt optimization commands."""
-        self.notify(
-            "Prompt optimization draft recognized. Confirmation will be available in a later ticket.",
-            severity="information",
+        """Handoff point for first-class prompt optimization commands: opens
+        the editable final review screen (#47) rather than launching
+        directly, so prompt/models/eval asset/metric/budget can be inspected
+        and corrected before an expensive or long-running optimization
+        actually starts."""
+        self.push_screen(
+            PromptOptimizationConfirmScreen(
+                draft,
+                runs_root=self.runs_root,
+                catalog_root=self._model_catalog_root,
+                prompt_routing_policy=self._prompt_routing_policy,
+                eval_assets_root=self._eval_assets_root,
+            )
         )
+
+    def is_run_live(self) -> bool:
+        """Public counterpart to `_run_is_live`, for callers outside this
+        class (e.g. PromptOptimizationConfirmScreen deciding whether Launch
+        should start a run immediately or queue behind the active one)."""
+        return self._run_is_live()
+
+    def _adopt_live_prompt_optimization_spec(self, spec: PromptOptimizationRunSpec) -> DashboardState:
+        """Prompt-optimization counterpart to `_adopt_live_spec`: promotes
+        this AutumnApp into a live prompt optimization run. There's no
+        script_path/dry_run to track here -- `spec.optimization_spec` is the
+        durable input `runner.launch` actually consumes."""
+        self.run_name = spec.run_name
+        self.run_dir = spec.run_dir
+        self.script_path = None
+        self.dry_run = False
+
+        state = DashboardState(run_name=spec.run_name, run_dir=spec.run_dir, run_kind=RunKind.PROMPT_OPTIMIZATION)
+        self.state = state
+        self._dashboard_callback = DashboardCallback(self, state)
+        self._queue_watch_state = state
+        return state
+
+    def _launch_runner_prompt_optimization(self, spec: PromptOptimizationRunSpec) -> None:
+        kwargs = {}
+        if self._prompt_optimization_runtime is not None:
+            kwargs["prompt_optimization_runtime"] = self._prompt_optimization_runtime
+        runner.launch(self._dashboard_callback, spec, **kwargs)
+
+    def launch_prompt_optimization_run(self, spec: PromptOptimizationRunSpec) -> None:
+        """PromptOptimizationConfirmScreen's Launch action when no run is
+        currently live: promotes into a live prompt-optimization run,
+        mirroring `launch_gepa_run` for script `LaunchSpec`s."""
+        state = self._adopt_live_prompt_optimization_spec(spec)
+        self._dashboard_screen = DashboardScreen(
+            self.runs_root,
+            live_state=state,
+            chat_messages=self.chat_messages,
+            chat_model_status=self._chat_model_status,
+            model_catalog_root=self._model_catalog_root,
+            prompt_routing_policy=self._prompt_routing_policy,
+            download_status=self._download_status,
+        )
+        self.switch_screen(self._dashboard_screen)
+        self._launch_runner_prompt_optimization(spec)
+
+    def queue_prompt_optimization_run(self, spec: PromptOptimizationSpec) -> None:
+        """PromptOptimizationConfirmScreen's Launch action when a run is
+        already live: enqueues behind it, same as a script run submitted
+        while busy (see `submit_command`)."""
+        self.pending_queue.append(queue_store.PromptOptimizationQueueItem(spec))
+        self._persist_queue()
+        self._refresh_queue_panel()
+
+    def _launch_prompt_optimization_now(self, spec: PromptOptimizationSpec) -> None:
+        """Launches `spec` against the already-mounted DashboardScreen
+        (mirrors `_launch_spec_now`) -- used when a queued prompt
+        optimization run reaches the front of the queue."""
+        run_spec = PromptOptimizationRunSpec(optimization_spec=spec, run_dir=self.runs_root / spec.run_name)
+        state = self._adopt_live_prompt_optimization_spec(run_spec)
+        self._dashboard_screen.promote_to_live(state)
+        self._launch_runner_prompt_optimization(run_spec)
 
     def _launch_spec_now(self, spec: LaunchSpec) -> None:
         """Launches `spec` against the already-mounted DashboardScreen (via
@@ -1367,6 +1455,9 @@ class AutumnApp(App):
                 return
             if isinstance(item, queue_store.ScriptQueueItem):
                 self._launch_spec_now(item.spec)
+                return
+            if isinstance(item, queue_store.PromptOptimizationQueueItem):
+                self._launch_prompt_optimization_now(item.spec)
                 return
             self.pending_queue.insert(0, item)
             self._persist_queue()
