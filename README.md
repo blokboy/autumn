@@ -49,6 +49,12 @@ Press Enter on an empty landing input to browse previous runs. Type `gepa run ..
 gepa run fixtures/examples/priority_triage.py --dry-run
 ```
 
+Optimize a prompt without writing a GEPA script:
+
+```text
+gepa optimize --prompt "Classify this support ticket by priority." --model tiny --eval tiny-smoke@2026.07.12 --metric exact_match --name ticket-priority
+```
+
 Inside the dashboard, press `:` to focus the command bar.
 
 ## GEPA Runs
@@ -78,13 +84,63 @@ autumn runs
 autumn runs --json
 ```
 
-Autumn monkeypatches `gepa.optimize` and `gepa.optimize_anything`, runs your script via `runpy`, and streams real `GEPACallback` events into the dashboard. Runs are stored under `$XDG_DATA_HOME/autumn/runs`, falling back to `~/.local/share/autumn/runs`.
+Autumn monkeypatches `gepa.optimize` and `gepa.optimize_anything`, runs your script via `runpy`, and streams real `GEPACallback` events into the dashboard. Script runs are explicit: `gepa run <script.py>` is accepted in the TUI, while bare `gepa <script.py>` is rejected with guidance to choose `gepa run` or `gepa optimize`.
+
+Runs are stored under `$XDG_DATA_HOME/autumn/runs`, falling back to `~/.local/share/autumn/runs`.
+
+## Prompt Optimization
+
+Use `gepa optimize` when you have a prompt and want Autumn to run GEPA against an installed eval asset without writing a Python launcher script. The command creates a prompt-optimization draft and opens an editable confirmation screen before anything launches.
+
+```text
+gepa optimize --prompt "Answer the customer in one concise paragraph." --system-prompt "You are a support assistant." --task-model tiny --optimizer-model openai/gpt-4.1-mini --eval tiny-smoke@2026.07.12 --metric exact_match --budget 25 --name support-replies
+```
+
+The confirmation screen lets you review and edit the prompt, optional system prompt, task model, optimizer model, eval asset, metric, run name, and metric-call budget. Required fields must be present before launch. If either selected model is hosted by Groq, Anthropic, or OpenAI, the screen shows a hosted-provider data-flow warning because prompts, eval inputs, candidate prompts, and model responses may leave your machine during the run.
+
+You can also start the same flow conversationally with narrow GEPA-specific chat phrases:
+
+```text
+run GEPA on this prompt: Answer the customer in one concise paragraph.
+use GEPA to optimize "Classify this ticket by priority."
+```
+
+Generic requests such as `optimize this`, `improve this`, or `make this better` stay in normal chat. During intake, Autumn asks targeted follow-up questions for missing fields and accepts deterministic multi-field answers such as `eval tiny-smoke@2026.07.12 metric exact_match budget 25`.
+
+Prompt optimization runs use the same dashboard lifecycle as script runs: they queue behind active work, stream GEPA progress, populate Overview/Candidates/Log, and add a dedicated best-result surface when the run finishes. The best result includes the optimized prompt, optional system prompt, score when available, and artifact paths. Completion writes durable artifacts into the run directory:
+
+- `autumn_prompt_optimization_spec.json` - the exact prompt optimization spec used for the run.
+- `autumn_best_candidate.json` - the best candidate metadata, score, and candidate fields.
+- `autumn_best_prompt.md` - a copy-friendly Markdown version of the optimized prompt.
+
+Historical prompt optimization runs reload those artifacts so the best prompt remains available after relaunch.
+
+## Eval Assets and Metrics
+
+Prompt optimization uses installed eval assets. Eval assets are immutable, versioned, data-only bundles discovered from a static manifest and installed locally before runtime.
+
+```bash
+autumn evals available
+autumn evals install tiny-smoke@2026.07.12
+autumn evals list
+autumn evals remove tiny-smoke@2026.07.12
+```
+
+`autumn evals available` shows remote manifest metadata such as label, description, supported metrics, size, license, and provenance. `autumn evals install` downloads the selected version, verifies its checksum, validates the data-only bundle, and records the installed manifest locally. Reinstalling an already-installed immutable version is refused rather than overwritten.
+
+Eval assets declare which built-in metrics they support. Autumn currently ships:
+
+- `exact_match` - scores exact normalized agreement with the eval answer.
+- `contains` - scores whether the final response contains the eval answer.
+
+You may also choose a custom local metric by explicit file path and function name in the confirmation screen. Custom local metrics are trusted local code, like running your own GEPA script: they are never downloaded as eval assets and are visually marked as trusted local code. Custom metric functions receive the eval example, final response, and candidate context; Autumn does not pass the full model transcript in v1.
 
 ## Dashboard
 
-The dashboard has six main tabs:
+The dashboard has seven main tabs when a prompt optimization result is available, and six for ordinary script runs:
 
 - **Overview** - run status, iteration/budget progress, and current best candidate.
+- **Best Result** - prompt-optimization-only result surface with the optimized prompt, optional system prompt, score, and artifact status.
 - **Candidates** - sortable candidate table with Pareto-front markers.
 - **Log** - streaming event log for the selected run.
 - **Chat** - shared conversation with Autumn, including model status, tool status, citations, and subagent messages.
@@ -175,10 +231,11 @@ Dashboard subagents appear as named chat participants, run alongside normal chat
 Autumn keeps command submission ordered:
 
 - Submit `gepa run ...` while a run is live and it queues behind the active run.
+- Submit `gepa optimize ...` while a run is live and its durable prompt-optimization spec queues behind the active run.
 - Submit chat while a run is live and the prompt is recorded immediately, then answered in order.
 - Submit `gepa run --run-dir <directory>` and each direct child Python script is queued in sorted order.
 
-Pending queues and unfinished chat sessions are persisted. On relaunch, Autumn offers to resume or start fresh.
+Pending queues and unfinished chat sessions are persisted. Queue sessions preserve typed script runs, prompt optimization specs, and chat prompts distinctly, so mixed queues can be resumed after relaunch. On relaunch, Autumn offers to resume or start fresh.
 
 ## Configuration Paths
 

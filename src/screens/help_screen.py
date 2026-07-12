@@ -51,6 +51,10 @@ class HelpScreen(ModalScreen):
             yield Label("Q (shift+q)    Send graceful stop signal to the current run")
             yield Label("r    Resume a stopped/failed run")
             yield Label(":    Focus the command bar (gepa run / gepa optimize / chat)")
+            yield Label("gepa run <script.py>    Launch a user-authored GEPA script")
+            yield Label("gepa optimize ...    Review and launch prompt optimization")
+            yield Label("autumn evals list / available / install / remove    Manage eval assets")
+            yield Label("Metrics: exact_match, contains, or custom local trusted code")
             yield Label("q    Quit (confirms first if a run is active)")
 
             yield Label("General", classes="help-heading")
