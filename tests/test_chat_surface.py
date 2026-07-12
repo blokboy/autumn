@@ -179,6 +179,50 @@ async def test_chat_transcript_does_not_force_scroll_when_user_reads_history():
         assert "new reply while reading history" in str(chat_text)
 
 
+async def test_chat_transcript_can_be_selected_and_copied_with_keyboard():
+    messages = [
+        ChatMessage(role="user", text="copy this question"),
+        ChatMessage(role="assistant", text="copy this answer", model="tiny"),
+    ]
+
+    class ChatHarness(App):
+        def compose(self) -> ComposeResult:
+            yield ChatView(messages)
+
+    async with ChatHarness().run_test() as pilot:
+        await pilot.pause()
+        pilot.app.query_one(ChatView).focus()
+        await pilot.press("ctrl+a")
+
+        selected_text = pilot.app.screen.get_selected_text()
+        assert selected_text is not None
+        assert "You: copy this question" in selected_text
+        assert "Autumn [tiny]: copy this answer" in selected_text
+
+        await pilot.press("ctrl+c")
+
+        assert "You: copy this question" in pilot.app.clipboard
+        assert "Autumn [tiny]: copy this answer" in pilot.app.clipboard
+
+
+async def test_chat_copy_shortcut_falls_back_to_full_transcript_without_selection():
+    messages = [
+        ChatMessage(role="user", text="copy all"),
+        ChatMessage(role="assistant", text="without selecting first"),
+    ]
+
+    class ChatHarness(App):
+        def compose(self) -> ComposeResult:
+            yield ChatView(messages)
+
+    async with ChatHarness().run_test() as pilot:
+        await pilot.pause()
+        pilot.app.query_one(ChatView).focus()
+        await pilot.press("ctrl+c")
+
+        assert pilot.app.clipboard == _render_messages(messages)
+
+
 async def test_subagent_command_preserves_raw_command_and_posts_named_result(tmp_path):
     source_model = tmp_path / "source.gguf"
     source_model.write_bytes(b"fake gguf")

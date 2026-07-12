@@ -1,6 +1,7 @@
 """Dashboard chat transcript view."""
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
@@ -54,6 +55,13 @@ def _render_messages(messages: list[ChatMessage]) -> str:
 
 class ChatView(Static):
     """Renders the shared dashboard chat conversation."""
+
+    can_focus = True
+
+    BINDINGS = [
+        Binding("ctrl+a", "select_chat_transcript", "Select chat", show=False),
+        Binding("ctrl+c", "copy_chat_selection", "Copy chat", show=False, priority=True),
+    ]
 
     DEFAULT_CSS = """
     ChatView {
@@ -129,3 +137,11 @@ class ChatView(Static):
     def _should_follow_transcript(self) -> bool:
         scroller = self.query_one("#chat-transcript-scroll", VerticalScroll)
         return scroller.max_scroll_y == 0 or scroller.is_vertical_scroll_end
+
+    def action_select_chat_transcript(self) -> None:
+        self.query_one("#chat-transcript", Static).text_select_all()
+
+    def action_copy_chat_selection(self) -> None:
+        selected_text = self.screen.get_selected_text()
+        self.app.copy_to_clipboard(selected_text or _render_messages(self._messages))
+        self.notify("Copied chat transcript", title="Chat")
