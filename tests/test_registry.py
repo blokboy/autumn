@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from models import DashboardState, RunKind, RunStatus, RunSummary
-from registry import infer_status, load_dashboard_state, merge_live, scan
+from prompt_optimization_contracts import BEST_RESULT_FILENAME
+from registry import infer_status, load_best_result_artifacts, load_dashboard_state, merge_live, scan
 
 
 def _dead_pid() -> int:
@@ -478,3 +479,54 @@ def test_load_dashboard_state_falls_back_to_inline_score_keys_without_snapshot(t
     assert state.best_idx == 1
     assert state.pareto_front == set()
     assert state.candidates[1].val_score == 0.9
+
+
+# --- load_best_result_artifacts (#49) ---------------------------------------
+
+
+def _write_best_result(run_dir: Path, *, prompt: str, system_prompt=None, score=0.9) -> None:
+    (run_dir / BEST_RESULT_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "candidate_json": "autumn_best_candidate.json",
+                "prompt_markdown": "autumn_best_prompt.md",
+                "best_prompt": {
+                    "prompt": prompt,
+                    "system_prompt": system_prompt,
+                    "score": score,
+                    "candidate_idx": 1,
+                },
+            }
+        )
+    )
+
+
+def test_load_best_result_artifacts_reads_best_prompt_fields(tmp_path):
+    run_dir = tmp_path / "run1"
+    run_dir.mkdir()
+    _write_best_result(run_dir, prompt="Classify tickets.", system_prompt="Be terse.", score=0.75)
+
+    artifacts = load_best_result_artifacts(run_dir)
+
+    assert artifacts is not None
+    assert artifacts.best_prompt.prompt == "Classify tickets."
+    assert artifacts.best_prompt.system_prompt == "Be terse."
+    assert artifacts.best_prompt.score == 0.75
+    assert artifacts.candidate_json == "autumn_best_candidate.json"
+    assert artifacts.prompt_markdown == "autumn_best_prompt.md"
+
+
+def test_load_best_result_artifacts_returns_none_when_file_missing(tmp_path):
+    run_dir = tmp_path / "run1"
+    run_dir.mkdir()
+
+    assert load_best_result_artifacts(run_dir) is None
+
+
+def test_load_best_result_artifacts_returns_none_when_malformed(tmp_path):
+    run_dir = tmp_path / "run1"
+    run_dir.mkdir()
+    (run_dir / BEST_RESULT_FILENAME).write_text(json.dumps({"schema_version": 1}))
+
+    assert load_best_result_artifacts(run_dir) is None

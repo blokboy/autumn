@@ -33,6 +33,9 @@ from local_model_runner import LocalModelRunner, LocalModelRuntimeError
 from models import ChatMessage
 from openai_runner import OpenAIRunner, OpenAIRuntimeError
 from prompt_optimization_contracts import (
+    BEST_CANDIDATE_FILENAME,
+    BEST_PROMPT_FILENAME,
+    BEST_RESULT_FILENAME,
     BestPromptArtifact,
     BestResultArtifacts,
     ModelIdentity,
@@ -52,10 +55,6 @@ from prompt_optimization_metrics import (
 # finish in reasonable time against a hosted model, generous enough to let a
 # handful of reflective mutations happen.
 _DEFAULT_MAX_METRIC_CALLS = 30
-
-BEST_CANDIDATE_FILENAME = "autumn_best_candidate.json"
-BEST_PROMPT_FILENAME = "autumn_best_prompt.md"
-BEST_RESULT_FILENAME = "autumn_best_result.json"
 
 _ANSWER_KEYS = ("answer", "expected", "label", "target")
 _INPUT_KEYS = ("input", "prompt")

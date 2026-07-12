@@ -46,6 +46,7 @@ from typing import Any
 
 from models import CandidateRow, DashboardState, RunKind, RunStatus, RunSummary
 from procutil import pid_alive
+from prompt_optimization_contracts import BEST_RESULT_FILENAME, BestResultArtifacts
 
 _SCORE_KEYS = ("val_score", "valset_score", "average_score", "best_score", "score")
 _TERMINAL_EVENTS = {"on_optimization_end", "optimization_end"}
@@ -243,6 +244,26 @@ def merge_live(
         is_live=True,
     )
     return [live_summary] + rest
+
+
+def load_best_result_artifacts(run_dir: Path) -> BestResultArtifacts | None:
+    """Reads `autumn_best_result.json` -- the stable best-result contract
+    `prompt_optimization_runtime.py`/#48 writes into a run directory on
+    completion -- for both a live prompt optimization run that just finished
+    (the file is on disk before `DashboardCallback.mark_script_finished()`
+    ever runs) and any historical prompt optimization run reopened later.
+    Returns None if the file is absent (run still in progress, failed before
+    completion, or a script run that never writes one) or malformed, so
+    callers -- BestResultPane -- can show a "not yet available" state instead
+    of crashing.
+    """
+    payload = _read_json(Path(run_dir) / BEST_RESULT_FILENAME)
+    if payload is None:
+        return None
+    try:
+        return BestResultArtifacts.from_dict(payload)
+    except ValueError:
+        return None
 
 
 def load_dashboard_state(run_dir: Path) -> DashboardState:
