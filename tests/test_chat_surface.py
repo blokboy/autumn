@@ -19,7 +19,7 @@ from models import (
     RunStatus,
 )
 from screens.dashboard_screen import DashboardScreen
-from widgets.chat_view import ChatView, _render_messages
+from widgets.chat_view import ChatView, _render_messages, _render_tool_status
 from widgets.command_bar import CommandBar
 
 
@@ -72,6 +72,28 @@ def test_chat_transcript_renders_named_participant_with_model_metadata():
     assert "You: hello" in rendered
     assert "Autumn [local/tiny]: hi" in rendered
     assert "Autumn Sub Agent 1 [local/tiny]: I checked the docs." in rendered
+
+
+def test_chat_tool_status_renders_animated_ellipsis_frames():
+    assert _render_tool_status(None) == ""
+    assert _render_tool_status("Searching docs for 'Autumn'", frame=0) == "Searching docs for 'Autumn'."
+    assert _render_tool_status("Searching docs for 'Autumn'", frame=1) == "Searching docs for 'Autumn'.."
+    assert _render_tool_status("Searching docs for 'Autumn'", frame=2) == "Searching docs for 'Autumn'..."
+
+
+async def test_chat_tool_status_animates_while_search_is_active():
+    class ChatHarness(App):
+        def compose(self) -> ComposeResult:
+            yield ChatView([], tool_status="Searching docs for 'Autumn'")
+
+    async with ChatHarness().run_test() as pilot:
+        await pilot.pause()
+        first = str(pilot.app.query_one("#chat-tool-status", Static).content)
+        await pilot.pause(0.45)
+        second = str(pilot.app.query_one("#chat-tool-status", Static).content)
+
+        assert first == "Searching docs for 'Autumn'."
+        assert second == "Searching docs for 'Autumn'.."
 
 
 async def test_chat_transcript_treats_model_output_as_plain_text():

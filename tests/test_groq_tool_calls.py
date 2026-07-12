@@ -15,6 +15,7 @@ import threading
 from dataclasses import dataclass
 
 import groq
+import httpx
 import pytest
 from textual.widgets import Input, Static
 
@@ -152,6 +153,40 @@ class _ToolCallingGroqClient:
         self.chat = _FakeChat(_ToolCallingCompletions(decision, stream_response, self.seen_calls))
 
 
+class _ToolUseFailedThenStreamingCompletions:
+    def __init__(self, failed_generation: str, stream_response: _FakeStream, seen_calls: list[dict]):
+        self._failed_generation = failed_generation
+        self._stream_response = stream_response
+        self._seen_calls = seen_calls
+
+    def create(self, *, model: str, messages: list[dict], tools=None, stream: bool = False):
+        self._seen_calls.append({"model": model, "messages": messages, "tools": tools, "stream": stream})
+        if stream:
+            return self._stream_response
+        body = {
+            "error": {
+                "message": "Failed to call a function. Please adjust your prompt.",
+                "type": "invalid_request_error",
+                "code": "tool_use_failed",
+                "failed_generation": self._failed_generation,
+            }
+        }
+        response = httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions"),
+            json=body,
+        )
+        raise groq.BadRequestError(f"Error code: 400 - {body!r}", response=response, body=body)
+
+
+class _ToolUseFailedThenStreamingGroqClient:
+    def __init__(self, failed_generation: str, stream_response: _FakeStream):
+        self.seen_calls: list[dict] = []
+        self.chat = _FakeChat(
+            _ToolUseFailedThenStreamingCompletions(failed_generation, stream_response, self.seen_calls)
+        )
+
+
 def _no_tool_call_decision(text: str) -> _FakeDecision:
     return _FakeDecision(choices=[_FakeDecisionChoice(message=_FakeDecisionMessage(content=text))])
 
@@ -226,6 +261,63 @@ def test_generate_stream_sends_search_docs_schema_on_every_decide_call(tmp_path)
     [call] = client.seen_calls
     assert call["tools"] == _TOOLS
     assert search_docs.TOOL_SCHEMA in _TOOLS
+
+
+def test_generate_stream_recovers_search_docs_call_from_groq_tool_use_failed(tmp_path):
+    _write_docs_corpus(tmp_path)
+    stream_response = _FakeStream([_chunk("Autumn is the dashboard CLI for GEPA runs.")])
+    client = _ToolUseFailedThenStreamingGroqClient(
+        '<function=search_docs{"query": "Autumn"}</function>',
+        stream_response,
+    )
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    received: list[str] = []
+    statuses: list[str] = []
+    runner.generate_stream(
+        [ChatMessage(role="user", text="Can you explain Autumn?")],
+        "llama-3.3-70b-versatile",
+        on_chunk=received.append,
+        on_status=statuses.append,
+    )
+
+    assert received == ["Autumn is the dashboard CLI for GEPA runs."]
+    assert statuses == ["Searching docs for 'Autumn'"]
+    assert len(client.seen_calls) == 2
+    assert client.seen_calls[0]["tools"] == _TOOLS
+    assert client.seen_calls[1]["stream"] is True
+    second_messages = client.seen_calls[1]["messages"]
+    assert second_messages[1]["tool_calls"][0]["function"] == {
+        "name": search_docs.TOOL_NAME,
+        "arguments": '{"query": "Autumn"}',
+    }
+    assert second_messages[2]["role"] == "tool"
+    assert "README.md" in second_messages[2]["content"]
+
+
+def test_generate_stream_treats_unknown_failed_generation_tool_as_plain_response(tmp_path):
+    stream_response = _FakeStream([_chunk("Autumn is a CLI for working with GEPA runs.")])
+    client = _ToolUseFailedThenStreamingGroqClient(
+        '<function=explain_autumn{"topic": "Autumn"}</function>',
+        stream_response,
+    )
+    runner = GroqRunner(client=client, docs_root=tmp_path)
+
+    received: list[str] = []
+    statuses: list[str] = []
+    runner.generate_stream(
+        [ChatMessage(role="user", text="Can you explain Autumn?")],
+        "llama-3.3-70b-versatile",
+        on_chunk=received.append,
+        on_status=statuses.append,
+    )
+
+    assert received == ["Autumn is a CLI for working with GEPA runs."]
+    assert statuses == []
+    assert len(client.seen_calls) == 2
+    assert client.seen_calls[1]["stream"] is True
+    assert client.seen_calls[1]["tools"] is None
+    assert client.seen_calls[1]["messages"] == [{"role": "user", "content": "Can you explain Autumn?"}]
 
 
 def test_search_web_schema_is_not_offered_without_tavily_key_even_with_trigger(tmp_path, monkeypatch):
@@ -803,7 +895,8 @@ async def test_dashboard_chat_shows_search_status_while_tool_runs_and_clears_onc
             status_text = str(app.screen.query_one("#chat-tool-status", Static).content)
             if status_text:
                 break
-        assert status_text == "Searching docs for 'what does --dry-run do'"
+        assert status_text.startswith("Searching docs for 'what does --dry-run do'")
+        assert status_text.endswith((".", "..", "..."))
         # Nothing has streamed into the transcript yet.
         chat_text = str(app.screen.query_one("#chat-transcript", Static).content)
         assert "--dry-run` skips" not in chat_text
