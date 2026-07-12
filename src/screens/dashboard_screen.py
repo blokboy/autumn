@@ -44,6 +44,7 @@ _POLL_INTERVAL_SECONDS = 0.1
 # not fast enough to feel "live".
 _REGISTRY_POLL_INTERVAL_SECONDS = 2.0
 _DEFAULT_AGENT_MODEL_STATUS = "Model: ready to choose a local model or offline fallback"
+_AGENT_STATUS_PREFIXES = ("Model: ", "Fallback: ")
 
 
 def _empty_state(runs_root: Path) -> DashboardState:
@@ -53,7 +54,14 @@ def _empty_state(runs_root: Path) -> DashboardState:
 
 
 def _agent_model_status(model_status: str | None) -> str:
-    return model_status or _DEFAULT_AGENT_MODEL_STATUS
+    status = model_status or _DEFAULT_AGENT_MODEL_STATUS
+    for prefix in _AGENT_STATUS_PREFIXES:
+        if status.startswith(prefix):
+            status = status[len(prefix) :]
+            break
+    if status.endswith(")") and " (" in status:
+        status = status.rsplit(" (", 1)[0]
+    return status
 
 
 class DashboardScreen(Screen):

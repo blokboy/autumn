@@ -27,7 +27,9 @@ async def test_left_sidebar_is_split_into_agents_and_jobs_panels(tmp_path):
         assert screen.query_one("#left-sidebar").styles.width.value == 32
         assert screen.query_one("#agents-panel").border_title == "Agents"
         assert str(screen.query_one("#autumn-agent-name", Static).content) == "Autumn"
-        assert "Model: ready to choose" in str(screen.query_one("#autumn-agent-model", Static).content)
+        assert str(screen.query_one("#autumn-agent-model", Static).content) == (
+            "ready to choose a local model or offline fallback"
+        )
         assert screen.query_one(RunSidebar).border_title == "Jobs"
 
 
@@ -44,6 +46,4 @@ async def test_autumn_agent_model_subheading_tracks_chat_model_status(tmp_path):
         )
         await pilot.pause()
 
-        assert str(screen.query_one("#autumn-agent-model", Static).content) == (
-            "Model: llama-3.3-70b-versatile (provider available)"
-        )
+        assert str(screen.query_one("#autumn-agent-model", Static).content) == "llama-3.3-70b-versatile"
