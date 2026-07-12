@@ -11,9 +11,9 @@ from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import ListView, TabbedContent, TabPane
+from textual.widgets import ListView, Static, TabbedContent, TabPane
 
 import catalog, registry, stub_providers
 from models import CatalogEntry, DashboardState, PromptRoutingPolicy, RunKind, RunStatus
@@ -58,6 +58,15 @@ class DashboardScreen(Screen):
     DEFAULT_CSS = """
     DashboardScreen > Horizontal {
         height: 1fr;
+    }
+    DashboardScreen #left-sidebar {
+        width: 32;
+        height: 1fr;
+    }
+    DashboardScreen #agents-panel {
+        width: 1fr;
+        height: 1fr;
+        padding: 1 2;
     }
     DashboardScreen TabbedContent {
         width: 1fr;
@@ -117,7 +126,11 @@ class DashboardScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Horizontal():
-            yield RunSidebar(self._summaries, live_state=self._live_state, id="sidebar")
+            with Vertical(id="left-sidebar"):
+                agents_panel = Static("", id="agents-panel")
+                agents_panel.border_title = "Agents"
+                yield agents_panel
+                yield RunSidebar(self._summaries, live_state=self._live_state, id="sidebar")
             with TabbedContent(initial=self._initial_tab or ""):
                 yield TabPane("Overview", OverviewPane(self._displayed_state, id="overview"))
                 yield TabPane("Candidates", CandidatesTable(self._displayed_state, id="candidates"))

@@ -78,7 +78,7 @@ class RunSidebar(ListView):
         return item
 
     def on_mount(self) -> None:
-        self.border_title = "Runs"
+        self.border_title = "Jobs"
 
     @property
     def selected_run_dir(self) -> Path | None:

@@ -20,6 +20,7 @@ Screen {
 /* ============================== */
 
 #sidebar,
+#agents-panel,
 OverviewPane,
 CandidatesTable,
 LogView,
@@ -33,6 +34,8 @@ TabbedContent {
 
 #sidebar:focus,
 #sidebar:focus-within,
+#agents-panel:focus,
+#agents-panel:focus-within,
 OverviewPane:focus,
 OverviewPane:focus-within,
 CandidatesTable:focus,
