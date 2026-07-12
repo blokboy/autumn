@@ -4,6 +4,7 @@ import json
 import threading
 
 from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
 from textual.widgets import Static
 from textual.widgets import Input
 
@@ -126,6 +127,56 @@ async def test_chat_transcript_treats_model_output_as_plain_text():
 
         chat_text = pilot.app.query_one("#chat-transcript", Static).content
         assert "[bad-markup" in str(chat_text)
+
+
+async def test_chat_transcript_is_scrollable_and_tracks_latest_message():
+    messages = [
+        ChatMessage(role="user" if index % 2 == 0 else "assistant", text=f"message {index}\n" + ("detail\n" * 3))
+        for index in range(40)
+    ]
+
+    class ChatHarness(App):
+        def compose(self) -> ComposeResult:
+            yield ChatView(messages)
+
+    async with ChatHarness().run_test(size=(80, 12)) as pilot:
+        await pilot.pause()
+        scroller = pilot.app.query_one("#chat-transcript-scroll", VerticalScroll)
+
+        assert scroller.max_scroll_y > 0
+
+        updated = messages + [ChatMessage(role="assistant", text="the latest reply")]
+        pilot.app.query_one(ChatView).refresh_from_messages(updated)
+        await pilot.pause()
+
+        assert scroller.scroll_y == scroller.max_scroll_y
+        chat_text = pilot.app.query_one("#chat-transcript", Static).content
+        assert "the latest reply" in str(chat_text)
+
+
+async def test_chat_transcript_does_not_force_scroll_when_user_reads_history():
+    messages = [
+        ChatMessage(role="user" if index % 2 == 0 else "assistant", text=f"message {index}\n" + ("detail\n" * 3))
+        for index in range(40)
+    ]
+
+    class ChatHarness(App):
+        def compose(self) -> ComposeResult:
+            yield ChatView(messages)
+
+    async with ChatHarness().run_test(size=(80, 12)) as pilot:
+        await pilot.pause()
+        scroller = pilot.app.query_one("#chat-transcript-scroll", VerticalScroll)
+        scroller.scroll_home(animate=False, immediate=True)
+        await pilot.pause()
+
+        updated = messages + [ChatMessage(role="assistant", text="new reply while reading history")]
+        pilot.app.query_one(ChatView).refresh_from_messages(updated)
+        await pilot.pause()
+
+        assert scroller.scroll_y == 0
+        chat_text = pilot.app.query_one("#chat-transcript", Static).content
+        assert "new reply while reading history" in str(chat_text)
 
 
 async def test_subagent_command_preserves_raw_command_and_posts_named_result(tmp_path):

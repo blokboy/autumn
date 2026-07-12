@@ -1,6 +1,7 @@
 """Dashboard chat transcript view."""
 
 from textual.app import ComposeResult
+from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from models import ChatMessage, ToolCitation
@@ -56,7 +57,11 @@ class ChatView(Static):
 
     DEFAULT_CSS = """
     ChatView {
+        height: 1fr;
         padding: 1 2;
+    }
+    ChatView #chat-transcript-scroll {
+        height: 1fr;
     }
     """
 
@@ -82,10 +87,12 @@ class ChatView(Static):
             id="chat-tool-status",
             markup=False,
         )
-        yield Static(_render_messages(self._messages), id="chat-transcript", markup=False)
+        with VerticalScroll(id="chat-transcript-scroll"):
+            yield Static(_render_messages(self._messages), id="chat-transcript", markup=False)
 
     def on_mount(self) -> None:
         self.set_interval(_TOOL_STATUS_INTERVAL_SECONDS, self._advance_tool_status)
+        self.call_after_refresh(self._scroll_transcript_to_end)
 
     def refresh_from_messages(
         self,
@@ -98,9 +105,12 @@ class ChatView(Static):
         if tool_status != self._tool_status:
             self._tool_status_frame = 0
         self._tool_status = tool_status
+        should_follow_transcript = self._should_follow_transcript()
         self.query_one("#chat-model-status", Static).update(_render_model_status(model_status))
         self._update_tool_status()
         self.query_one("#chat-transcript", Static).update(_render_messages(messages))
+        if should_follow_transcript:
+            self.call_after_refresh(self._scroll_transcript_to_end)
 
     def _advance_tool_status(self) -> None:
         if self._tool_status is None:
@@ -112,3 +122,10 @@ class ChatView(Static):
         self.query_one("#chat-tool-status", Static).update(
             _render_tool_status(self._tool_status, self._tool_status_frame)
         )
+
+    def _scroll_transcript_to_end(self) -> None:
+        self.query_one("#chat-transcript-scroll", VerticalScroll).scroll_end(animate=False, immediate=True)
+
+    def _should_follow_transcript(self) -> bool:
+        scroller = self.query_one("#chat-transcript-scroll", VerticalScroll)
+        return scroller.max_scroll_y == 0 or scroller.is_vertical_scroll_end
