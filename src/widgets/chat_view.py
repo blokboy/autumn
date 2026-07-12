@@ -1,5 +1,7 @@
 """Dashboard chat transcript view."""
 
+from rich.style import Style
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
@@ -53,6 +55,68 @@ def _render_messages(messages: list[ChatMessage]) -> str:
     return "\n\n".join(lines)
 
 
+def _citation_summary_label(citation: ToolCitation) -> str:
+    count = len(citation.sources)
+    return "Source" if count == 1 else f"Sources ({count})"
+
+
+def _append_citation_span(text: Text, index: int, citation: ToolCitation | None, expanded: bool) -> None:
+    """Appends a clickable "Sources" toggle for `message[index]`, generically
+    across whatever tool produced the citation (see `_render_citation`).
+    Collapsed by default so a grounded reply doesn't dump every source as one
+    paragraph -- clicking the toggle (wired via Rich's `@click` style meta,
+    dispatched to `_TranscriptView.action_toggle_sources`) expands it into a
+    one-source-per-line list."""
+    if citation is None or not citation.sources:
+        return
+    marker = "▾" if expanded else "▸"
+    text.append("\n")
+    text.append(
+        f"{marker} {_citation_summary_label(citation)}",
+        style=Style(dim=True, underline=True, meta={"@click": f"toggle_sources({index})"}),
+    )
+    if expanded:
+        for source in citation.sources:
+            text.append(f"\n    • {source}", style=Style(dim=True))
+
+
+def _render_transcript_text(messages: list[ChatMessage], expanded_citations: set[int]) -> Text:
+    if not messages:
+        return Text("Ask Autumn about your runs from the landing input or command bar.")
+    text = Text()
+    for index, message in enumerate(messages):
+        if index:
+            text.append("\n\n")
+        speaker = message.participant_name or ("You" if message.role == "user" else "Autumn")
+        suffix = f" [{message.model}]" if message.model else ""
+        text.append(f"{speaker}{suffix}: {message.text}")
+        _append_citation_span(text, index, message.citation, index in expanded_citations)
+    return text
+
+
+class _TranscriptView(Static):
+    """The `#chat-transcript` widget: renders messages as plain, selectable
+    text, but tracks which messages' `Sources` toggles have been clicked so a
+    later `set_messages` refresh (e.g. a streaming chunk landing) doesn't
+    reset an already-expanded citation back to collapsed."""
+
+    def __init__(self, messages: list[ChatMessage], *args, **kwargs) -> None:
+        super().__init__(_render_transcript_text(messages, set()), *args, **kwargs)
+        self._messages = messages
+        self._expanded_citations: set[int] = set()
+
+    def set_messages(self, messages: list[ChatMessage]) -> None:
+        self._messages = messages
+        self.update(_render_transcript_text(messages, self._expanded_citations))
+
+    def action_toggle_sources(self, index: int) -> None:
+        if index in self._expanded_citations:
+            self._expanded_citations.discard(index)
+        else:
+            self._expanded_citations.add(index)
+        self.update(_render_transcript_text(self._messages, self._expanded_citations))
+
+
 class ChatView(Static):
     """Renders the shared dashboard chat conversation."""
 
@@ -96,7 +160,7 @@ class ChatView(Static):
             markup=False,
         )
         with VerticalScroll(id="chat-transcript-scroll"):
-            yield Static(_render_messages(self._messages), id="chat-transcript", markup=False)
+            yield _TranscriptView(self._messages, id="chat-transcript")
 
     def on_mount(self) -> None:
         self.set_interval(_TOOL_STATUS_INTERVAL_SECONDS, self._advance_tool_status)
@@ -116,7 +180,7 @@ class ChatView(Static):
         should_follow_transcript = self._should_follow_transcript()
         self.query_one("#chat-model-status", Static).update(_render_model_status(model_status))
         self._update_tool_status()
-        self.query_one("#chat-transcript", Static).update(_render_messages(messages))
+        self.query_one("#chat-transcript", _TranscriptView).set_messages(messages)
         if should_follow_transcript:
             self.call_after_refresh(self._scroll_transcript_to_end)
 

@@ -18,6 +18,7 @@ from models import (
     ProviderAccount,
     ProviderModel,
     RunStatus,
+    ToolCitation,
 )
 from screens.dashboard_screen import DashboardScreen
 from widgets.chat_view import ChatView, _render_messages, _render_tool_status
@@ -221,6 +222,75 @@ async def test_chat_copy_shortcut_falls_back_to_full_transcript_without_selectio
         await pilot.press("ctrl+c")
 
         assert pilot.app.clipboard == _render_messages(messages)
+
+
+async def test_chat_citation_sources_are_collapsed_until_clicked_then_list_one_per_line():
+    messages = [
+        ChatMessage(
+            role="assistant",
+            text="short answer",
+            citation=ToolCitation(tool="search_docs", sources=["a.md — A", "b.md — B"]),
+        ),
+    ]
+
+    class ChatHarness(App):
+        def compose(self) -> ComposeResult:
+            yield ChatView(messages)
+
+    async with ChatHarness().run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        transcript = pilot.app.screen.query_one("#chat-transcript", Static)
+
+        collapsed_text = str(transcript.content)
+        assert "Sources (2)" in collapsed_text
+        assert "a.md — A" not in collapsed_text
+        assert "b.md — B" not in collapsed_text
+
+        # The "Sources (2)" toggle is on the second line, right under the
+        # single message -- clicking it expands each source onto its own line.
+        await pilot.click(transcript, offset=(0, 1))
+        await pilot.pause()
+
+        expanded_text = str(transcript.content)
+        assert "a.md — A" in expanded_text
+        assert "b.md — B" in expanded_text
+        assert expanded_text.index("a.md — A") < expanded_text.index("b.md — B")
+
+        # Clicking again collapses it back down.
+        await pilot.click(transcript, offset=(0, 1))
+        await pilot.pause()
+
+        assert "a.md — A" not in str(transcript.content)
+
+
+async def test_chat_citation_toggle_state_survives_a_transcript_refresh():
+    """A streaming chunk landing mid-turn re-renders the transcript via
+    `refresh_from_messages` -- an already-expanded citation on an earlier
+    message shouldn't silently collapse back when that happens."""
+    messages = [
+        ChatMessage(
+            role="assistant",
+            text="short answer",
+            citation=ToolCitation(tool="search_docs", sources=["a.md — A"]),
+        ),
+    ]
+
+    class ChatHarness(App):
+        def compose(self) -> ComposeResult:
+            yield ChatView(messages)
+
+    async with ChatHarness().run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        transcript = pilot.app.screen.query_one("#chat-transcript", Static)
+        await pilot.click(transcript, offset=(0, 1))
+        await pilot.pause()
+        assert "a.md — A" in str(transcript.content)
+
+        updated = [*messages, ChatMessage(role="user", text="follow-up")]
+        pilot.app.query_one(ChatView).refresh_from_messages(updated)
+        await pilot.pause()
+
+        assert "a.md — A" in str(pilot.app.screen.query_one("#chat-transcript", Static).content)
 
 
 async def test_subagent_command_preserves_raw_command_and_posts_named_result(tmp_path):

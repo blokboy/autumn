@@ -845,8 +845,18 @@ async def test_dashboard_chat_asks_a_docs_question_and_gets_a_grounded_answer_en
         assert "Model: llama-3.3-70b-versatile (provider available)" in str(status_text)
         chat_text = app.screen.query_one("#chat-transcript", Static).content
         assert "--dry-run" in str(chat_text)
-        # The citation shows up under the grounded answer in the transcript...
-        assert "Source: README.md — Usage" in str(chat_text)
+        # The citation shows up under the grounded answer as a collapsed,
+        # clickable toggle -- not the raw source list -- until clicked...
+        assert "Source" in str(chat_text)
+        assert "README.md — Usage" not in str(chat_text)
+
+        # ...clicking the toggle expands it into a one-source-per-line list.
+        from widgets.chat_view import _TranscriptView
+
+        app.screen.query_one("#chat-transcript", _TranscriptView).action_toggle_sources(1)
+        await pilot.pause()
+        chat_text = app.screen.query_one("#chat-transcript", Static).content
+        assert "README.md — Usage" in str(chat_text)
         # ...and the transient "Searching..." status is gone once the turn
         # (and the citation it fed) has fully landed.
         tool_status_text = app.screen.query_one("#chat-tool-status", Static).content
